@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Text to Hyperlink Test</title>
+    <style>
+        body { font-family: sans-serif; line-height: 1.6; }
+        .container { max-width: 800px; margin: 0 auto; padding: 20px; }
+        .block { margin-bottom: 20px; padding: 10px; border: 1px solid #ccc; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Text to Hyperlink Test</h1>
+        
+        <div class="block">
+            <h2>Standard URLs</h2>
+            <p>Here is a link: https://www.google.com</p>
+            <p>Another one: http://example.com/path?query=1&param=2</p>
+            <p>Mixed text https://www.mozilla.org end of text.</p>
+        </div>
+
+        <div class="block">
+            <h2>Magnet Links</h2>
+            <p>magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a&dn=Example</p>
+        </div>
+
+        <div class="block">
+            <h2>Custom Protocols</h2>
+            <p>Telegram: tg://resolve?domain=telegram</p>
+            <p>Windows Store: ms-windows-store://pdp/?productid=9WZDNCRFHVJL</p>
+            <p>eD2k: ed2k://|file|eMule0.50a.zip|3023021|E67727F47772658CE63428ZB5Z789012|/</p>
+            <p>Thunder: thunder://QUFodHRwOi8vd3d3Lnh1bmxlaS5jb20vWlo=</p>
+        </div>
+
+        <div class="block">
+            <h2>Dynamic Content (Click to Load)</h2>
+            <button id="loadMore">Load More Content</button>
+            <div id="dynamicArea"></div>
+        </div>
+
+        <div class="block">
+            <h2>Performance Test (Large Block)</h2>
+            <div id="largeBlock"></div>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('loadMore').addEventListener('click', () => {
+            const div = document.createElement('div');
+            div.className = 'block';
+            div.innerHTML = '<p>Dynamic Link: https://dynamic.example.com/' + Math.random() + '</p>';
+            document.getElementById('dynamicArea').appendChild(div);
+        });
+
+        const largeBlock = document.getElementById('largeBlock');
+        let content = '';
+        for (let i = 0; i < 5000; i++) {
+            content += 'Text ' + i + ' https://site.com/' + i + ' ';
+        }
+        largeBlock.textContent = content; // Set as text to simulate plain text
+    </script>
+</body>
+</html>
