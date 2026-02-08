@@ -22,7 +22,7 @@
         observeOptions: {
             root: null, // viewport
             rootMargin: '200px', // Pre-load slightly outside viewport
-            threshold: 0.1
+            threshold: 0 // Trigger as soon as any part is visible
         },
         processedAttribute: 'data-linkified'
     };
@@ -48,7 +48,10 @@
                     // Skip contenteditable
                     if (parent.isContentEditable) return NodeFilter.FILTER_REJECT;
 
-                    // Skip if already processed (though we check the container usually)
+                    // Allow if parent is the root we are currently processing
+                    if (parent === root) return NodeFilter.FILTER_ACCEPT;
+
+                    // Skip if parent is already processed and it's NOT the root
                     if (parent.hasAttribute && parent.hasAttribute(CONFIG.processedAttribute)) return NodeFilter.FILTER_REJECT;
 
                     return NodeFilter.FILTER_ACCEPT;
@@ -105,78 +108,90 @@
      * Convert text node to fragment with links
      */
     function linkifyTextNode(node) {
-        const text = node.nodeValue;
-        if (!text || !CONFIG.regex.test(text)) return;
+        try {
+            const text = node.nodeValue;
+            // Create a local regex to ensure thread safety (no lastIndex pollution)
+            // matching valid URL patterns including those with protocols
+            const regex = new RegExp(CONFIG.regex.source, 'gi');
 
-        const fragment = document.createDocumentFragment();
-        let lastIndex = 0;
-        let match;
+            if (!text || !regex.test(text)) return;
 
-        // Reset regex state
-        CONFIG.regex.lastIndex = 0;
+            const fragment = document.createDocumentFragment();
+            let lastIndex = 0;
+            let match;
+            let matchCount = 0;
 
-        while ((match = CONFIG.regex.exec(text)) !== null) {
-            let url = match[0];
-            const originalUrl = url;
+            // Reset regex state (implicitly 0 for new instance)
+            regex.lastIndex = 0;
 
-            // Trim trailing punctuation
-            url = trimUrl(url);
+            while ((match = regex.exec(text)) !== null) {
+                let url = match[0];
+                const originalUrl = url;
 
-            const matchIndex = match.index;
-            const preText = text.substring(lastIndex, matchIndex);
+                // Trim trailing punctuation
+                url = trimUrl(url);
 
-            // Add preceding text
-            if (preText.length > 0) {
-                fragment.appendChild(document.createTextNode(preText));
+                const matchIndex = match.index;
+                // Safety check for infinite loops or weird regex behavior
+                if (matchIndex < lastIndex) break;
+
+                const preText = text.substring(lastIndex, matchIndex);
+
+                // Add preceding text
+                if (preText.length > 0) {
+                    fragment.appendChild(document.createTextNode(preText));
+                }
+
+                // Create link
+                const a = document.createElement('a');
+                a.href = url;
+                a.textContent = url;
+                a.style.color = 'inherit';
+                a.style.textDecoration = 'underline';
+                a.target = '_blank';
+                a.rel = 'noopener noreferrer';
+
+                // Prevent recursive processing
+                a.setAttribute(CONFIG.processedAttribute, 'true');
+
+                fragment.appendChild(a);
+
+                const remainingMatchPart = originalUrl.substring(url.length);
+                if (remainingMatchPart.length > 0) {
+                    fragment.appendChild(document.createTextNode(remainingMatchPart));
+                }
+
+                lastIndex = matchIndex + originalUrl.length;
+                matchCount++;
             }
 
-            // Create link
-            const a = document.createElement('a');
-            a.href = url;
-            a.textContent = url;
-            a.style.color = 'inherit';
-            a.style.textDecoration = 'underline';
-            a.target = '_blank';
-            a.rel = 'noopener noreferrer';
-
-            // Prevent recursive processing
-            a.setAttribute(CONFIG.processedAttribute, 'true');
-
-            fragment.appendChild(a);
-
-            // Update lastIndex based on the potentially trimmed URL length
-            // wait, match[0] is the FULL match. If we trimmed it, the remaining part is just text.
-            // But we already added preText up to matchIndex. 
-            // So we added the link. Now we need to handle the TRAILING part of the match that was trimmed.
-
-            const trimmedCount = originalUrl.length - url.length;
-            const remainingMatchPart = originalUrl.substring(url.length);
-
-            if (remainingMatchPart.length > 0) {
-                fragment.appendChild(document.createTextNode(remainingMatchPart));
+            // Add remaining text
+            if (lastIndex < text.length) {
+                fragment.appendChild(document.createTextNode(text.substring(lastIndex)));
             }
 
-            lastIndex = matchIndex + originalUrl.length;
+            if (matchCount > 0) {
+                return fragment;
+            }
+            return null;
+        } catch (e) {
+            console.error('Text to Hyperlink Error:', e);
+            // Optional: Visual feedback for debug
+            // document.body.style.border = '5px solid red';
+            return null;
         }
-
-        // Add remaining text
-        if (lastIndex < text.length) {
-            fragment.appendChild(document.createTextNode(text.substring(lastIndex)));
-        }
-
-        return fragment;
     }
 
     /**
      * Process a container element
      */
     function processContainer(container) {
-        if (container.hasAttribute(CONFIG.processedAttribute)) return;
+        if (container.hasAttribute(CONFIG.processedAttribute)) {
+            return;
+        }
 
-        // Mark as processed immediately to prevent double processing
-        // Note: Ideally we mark the text nodes or their direct parents, but marking the container is a heuristic.
-        // For fine-grained control, we should just rely on the walker skipping 'a' tags.
-        // But for performance, marking the container helps IntersectionObserver know what's done.
+        const id = container.id || container.tagName;
+
         container.setAttribute(CONFIG.processedAttribute, 'true');
 
         const textNodes = getTextNodes(container);
@@ -242,44 +257,79 @@
     // MutationObserver for dynamic content
     let timeout = null;
     const mutationObserver = new MutationObserver((mutations) => {
-        // Debounce
-        if (timeout) clearTimeout(timeout);
-        timeout = setTimeout(() => {
-            mutations.forEach(mutation => {
+        // We use a set to track unique elements to re-observe/process
+        const elementsToUpdate = new Set();
+
+        mutations.forEach(mutation => {
+            // Check if this mutation is caused by us
+            // Heuristic: If addedNodes contains an 'A' tag with our attribute, it's likely us.
+            let isSelfTriggered = false;
+
+            // Check added nodes
+            if (mutation.addedNodes.length > 0) {
+                for (const node of mutation.addedNodes) {
+                    if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'A' && node.hasAttribute(CONFIG.processedAttribute)) {
+                        isSelfTriggered = true;
+                        break;
+                    }
+                }
+            }
+
+            if (isSelfTriggered) return;
+
+            if (mutation.type === 'childList') {
                 mutation.addedNodes.forEach(node => {
                     if (node.nodeType === Node.ELEMENT_NODE) {
-                        // Observe the new element for visibility
-                        // Optimization: Check if it's a large container or small element?
-                        // Just observe it.
-                        intersectionObserver.observe(node);
+                        // Ignore debug log
+                        if (node.id === 'tm-debug-log' || node.closest && node.closest('#tm-debug-log')) return;
 
-                        // Also check children if it's a huge tree inserted at once
-                        const children = node.querySelectorAll('*');
-                        children.forEach(child => intersectionObserver.observe(child));
+                        elementsToUpdate.add(node);
+                        // Also add children if needed, but IO will handle them if we just observe the root
+                        const children = node.querySelectorAll && node.querySelectorAll(relevantTags);
+                        if (children) children.forEach(c => elementsToUpdate.add(c));
+                    } else if (node.nodeType === Node.TEXT_NODE) {
+                        // If text is added, we need to process the parent
+                        if (node.parentNode && node.parentNode.nodeType === Node.ELEMENT_NODE) {
+                            // Ignore debug log
+                            if (node.parentNode.id === 'tm-debug-log' || node.parentNode.closest('#tm-debug-log')) return;
+
+                            elementsToUpdate.add(node.parentNode);
+                        }
                     }
                 });
-            });
-        }, 200); // 200ms debounce
+            } else if (mutation.type === 'characterData') {
+                // If text content changes directly
+                if (mutation.target.nodeType === Node.TEXT_NODE && mutation.target.parentNode) {
+                    if (mutation.target.parentNode.id === 'tm-debug-log' || mutation.target.parentNode.closest('#tm-debug-log')) return;
+                    elementsToUpdate.add(mutation.target.parentNode);
+                }
+            }
+        });
+
+        if (elementsToUpdate.size > 0) {
+            if (timeout) clearTimeout(timeout);
+            timeout = setTimeout(() => {
+                elementsToUpdate.forEach(el => {
+                    const id = el.id || el.tagName;
+                    // Reset processed state
+                    if (el.removeAttribute) {
+                        el.removeAttribute(CONFIG.processedAttribute);
+                    }
+                    // Re-observe
+                    intersectionObserver.observe(el);
+                });
+            }, 200);
+        }
     });
 
     // Start observing
     mutationObserver.observe(document.body, {
         childList: true,
-        subtree: true
+        subtree: true,
+        characterData: true // Watch for text changes
     });
 
     // Initial pass: Observe all existing elements
-    // We target "blocks" usually, but observing everything might be heavy on memory for IO?
-    // Optimization: Observe specific block-level elements or just body's direct children?
-    // Let's observe all elements that might contain text.
-    // A better approach for initial load:
-    // Just run the walker on document.body but check visibility? 
-    // Or just observe all elements. 
-    // Let's try observing all leaf-ish elements or block elements.
-
-    // Strategy: Observe everything, IO is generally efficient.
-    // But observing 10k elements is bad.
-    // Better strategy: Observe specific tags? p, div, span, li, td?
     const relevantTags = 'p, div, span, li, td, h1, h2, h3, h4, h5, h6, article, section, blockquote';
     document.querySelectorAll(relevantTags).forEach(el => {
         intersectionObserver.observe(el);

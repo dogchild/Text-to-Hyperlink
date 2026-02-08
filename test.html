@@ -1,25 +1,48 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Text to Hyperlink Test</title>
     <style>
-        body { font-family: sans-serif; line-height: 1.6; }
-        .container { max-width: 800px; margin: 0 auto; padding: 20px; }
-        .block { margin-bottom: 20px; padding: 10px; border: 1px solid #ccc; }
-        .hidden { display: none; }
+        body {
+            font-family: sans-serif;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .block {
+            margin-bottom: 20px;
+            padding: 10px;
+            border: 1px solid #ccc;
+        }
+
+        .hidden {
+            display: none;
+        }
     </style>
 </head>
+
 <body>
     <div class="container">
         <h1>Text to Hyperlink Test</h1>
-        
+
         <div class="block">
             <h2>Standard URLs</h2>
             <p>Here is a link: https://www.google.com</p>
             <p>Another one: http://example.com/path?query=1&param=2</p>
             <p>Mixed text https://www.mozilla.org end of text.</p>
+        </div>
+
+        <div class="block">
+            <h2>Static Pattern Test (Crucial)</h2>
+            <p>Text 1 https://site.com/1 Text 2 https://site.com/2 Text 3 https://site.com/3</p>
         </div>
 
         <div class="block">
@@ -63,4 +86,5 @@
         largeBlock.textContent = content; // Set as text to simulate plain text
     </script>
 </body>
+
 </html>
