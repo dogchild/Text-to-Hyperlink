@@ -3,7 +3,7 @@
 // @name:zh-CN   文本转超链接 + 网盘提取码自动填充
 // @name:zh-TW   文本转超链接 + 网盘提取码自动填充
 // @namespace    http://tampermonkey.net/
-// @version      1.0.6
+// @version      1.0.17
 // @description  Convert plain text URLs to clickable links and auto-fill cloud drive extraction codes.
 // @description:zh-CN 识别网页中的纯文本链接并转换为可点击的超链接，同时自动识别网盘链接并填充提取码。
 // @description:zh-TW 识别网页中的纯文本链接并转换为可点击的超链接，同时自动识别网盘链接并填充提取码。
@@ -116,7 +116,7 @@
     const DRIVE_RULES = [
         { name: 'baidu', regex: /pan\.baidu\.com/, codeParams: ['pwd', 'code', '提取码'] },
         { name: 'aliyun', regex: /alipan\.com|aliyundrive\.com/, codeParams: ['pwd', 'code', '提取码'] },
-        { name: 'lanzou', regex: /lanzou.\.com|woozooo\.com/, codeParams: ['pwd', 'code', '提取码'] },
+        { name: 'lanzou', regex: /(?:lanzou|woozooo).*\.com/, codeParams: ['pwd', 'code', '提取码'] },
         { name: '123pan', regex: /123pan\.com/, codeParams: ['pwd', 'code', '提取码'] },
         { name: 'quark', regex: /pan\.quark\.cn/, codeParams: ['pwd', 'code', '提取码'] },
         { name: 'chengtong', regex: /ctfile\.com|pipipan\.com/, codeParams: ['pwd', 'code', '提取码'] },
@@ -125,21 +125,28 @@
 
     /**
      * Attempt to find extraction code near the link (Front & Back, Cross-Node, Parent-Sibling)
+     * Supports both Text nodes and Element nodes (for existing links)
      */
     function extractCode(node, matchIndex, matchEnd) {
-        const text = node.nodeValue;
-        const SEARCH_RANGE = 100; // Increased to 120 to handle whitespace/indentation
+        // If node is an Element (existing link), treat matchIndex as 0 and text as its textContent
+        const isElement = node.nodeType === Node.ELEMENT_NODE;
+        const text = isElement ? (node.innerText || node.textContent) : node.nodeValue;
+        const SEARCH_RANGE = 120;
 
         // Helper to get text from a node (Text or Element)
         const getTextFromNode = (n) => {
             if (!n) return '';
             if (n.nodeType === Node.TEXT_NODE) return n.nodeValue;
-            if (n.nodeType === Node.ELEMENT_NODE) return n.innerText || '';
+            if (n.nodeType === Node.ELEMENT_NODE) {
+                // Ignore scripts and styles for text extraction
+                if (['SCRIPT', 'STYLE', 'NOSCRIPT'].includes(n.tagName)) return '';
+                return n.innerText || n.textContent || '';
+            }
             return '';
         };
 
         // Helper to find next/prev meaningful sibling (skipping whitespace/br)
-        const getSiblingText = (startNode, direction = 'next', maxSteps = 3) => {
+        const getSiblingText = (startNode, direction = 'next', maxSteps = 10) => {
             let current = startNode;
             let result = '';
             let steps = 0;
@@ -154,7 +161,7 @@
                 }
 
                 // Skip <br>
-                if (current.tagName === 'BR') {
+                if (current.nodeType === Node.ELEMENT_NODE && current.tagName === 'BR') {
                     continue;
                 }
 
@@ -164,7 +171,7 @@
                     if (direction === 'next') result += '\n' + content;
                     else result = content + '\n' + result;
 
-                    if (result.length > 20) break;
+                    if (result.length > 50) break; // Optimization: stop if we have enough context
                     steps++;
                 }
             }
@@ -175,39 +182,58 @@
         const codeRegex = /(?:code|pwd|提取码|密码|访问码)\s*[:：]?\s*([a-zA-Z0-9]{4})/gi;
 
         // --- 1. Search Text AFTER Link (Priority) ---
-        // Range: matchEnd -> matchEnd + 120
+        // Range: matchEnd -> matchEnd + SEARCH_RANGE
         let textAfter = text.substring(matchEnd, matchEnd + SEARCH_RANGE);
         textAfter += getSiblingText(node, 'next');
-        // 1b. Parent Next Sibling (Block Level)
-        // Only check parent sibling if we exhausted the current text node within the range
-        // If we still had text in the current node (truncated by range), we shouldn't jump to next block
-        const exhaustedCurrentNode = (matchEnd + SEARCH_RANGE) >= node.nodeValue.length;
-        if (exhaustedCurrentNode && !/(?:code|pwd|提取码|密码|访问码)/i.test(textAfter) && node.parentNode) {
-            textAfter += getSiblingText(node.parentNode, 'next');
+
+        // 1b. Parent Next Sibling (Block Level / Bubble Up)
+        // Check up to 5 levels up for adjacent content
+        let parent = node.parentNode;
+        let limit = 5;
+        let pNode = node; // Current node in the traversal
+
+        while (parent && limit > 0) {
+            // If the current node was the last child, check parent's next sibling
+            if (!pNode.nextSibling) {
+                textAfter += getSiblingText(parent, 'next'); // Check parent's siblings
+            } else {
+                // If current node had siblings, we already checked them (via getSiblingText on node). 
+                // Wait.. getSiblingText only scans immediate siblings. 
+                // Logic update: We should check "next siblings of parent" regardless, 
+                // because the "next logical text" might be in the next paragraph (parent's sibling).
+                textAfter += getSiblingText(parent, 'next');
+            }
+            pNode = parent;
+            parent = parent.parentNode;
+            limit--;
         }
 
         // Find Closest After = FIRST match
-        // Because textAfter starts from matchEnd and goes right.
         codeRegex.lastIndex = 0;
         const matchAfter = codeRegex.exec(textAfter);
         if (matchAfter) return matchAfter[1];
 
         // --- 2. Search Text BEFORE Link (Secondary) ---
-        // Range: matchIndex - 120 -> matchIndex
+        // Range: matchIndex - SEARCH_RANGE -> matchIndex
         let textBefore = text.substring(Math.max(0, matchIndex - SEARCH_RANGE), matchIndex);
         textBefore = getSiblingText(node, 'prev') + textBefore;
 
-        if (!/(?:code|pwd|提取码|密码|访问码)/i.test(textBefore) && node.parentNode) {
-            textBefore = getSiblingText(node.parentNode, 'prev') + textBefore;
+        // Bubble up for previous text
+        parent = node.parentNode;
+        limit = 5;
+
+        while (parent && limit > 0) {
+            textBefore = getSiblingText(parent, 'prev') + textBefore;
+            parent = parent.parentNode;
+            limit--;
         }
 
         // Find Closest Before = LAST match
-        // Because textBefore ends at matchIndex. The match closest to the END of textBefore is the one closest to the link.
         codeRegex.lastIndex = 0;
         let bestBefore = null;
         let m;
         while ((m = codeRegex.exec(textBefore)) !== null) {
-            bestBefore = m[1]; // Keep updating, so we get the last one
+            bestBefore = m[1];
         }
 
         return bestBefore;
@@ -215,8 +241,13 @@
 
     /**
      * Auto-fill logic for Cloud Drive pages
+     * Uses MutationObserver for reliable element detection
      */
+    let hasFilledPassword = false; // Debounce flag
+
     function autoFillDrivePassword() {
+        if (hasFilledPassword) return; // Prevent multiple executions
+
         const hash = location.hash;
         if (!hash || !hash.includes('pwd=')) return;
 
@@ -225,42 +256,124 @@
 
         console.log('[Text-to-Hyperlink] Auto-filling password:', pwd);
 
-        // Heuristic Selectors
+        // Heuristic Selectors (ordered by specificity)
         const selectors = [
+            '#code_txt', // 189 Cloud specific
             '#accessCode', '#pwd', '#code', // ID
             'input[id*="code"]', 'input[id*="pwd"]', // Fuzzy ID
             'input[name="accessCode"]', 'input[name="pwd"]', // Name
             '.input-code', // Class
             'input[placeholder*="提取码"]', 'input[placeholder*="密码"]', 'input[placeholder*="Code"]', // Placeholder
+            '.ant-input[type="text"]', // Alipan specific
             'input[type="password"]' // Fallback
         ];
 
-        // Try to find the input
-        let input = null;
-        for (const sel of selectors) {
-            input = document.querySelector(sel);
-            if (input) break;
-        }
+        // Helper: Try to find input from selectors
+        const findInput = () => {
+            for (const sel of selectors) {
+                const el = document.querySelector(sel);
+                if (el && isValidPasswordInput(el)) return el;
+            }
+            return null;
+        };
 
-        if (input) {
-            input.value = pwd;
+        // Helper: Check if input is a valid password input (not a search box)
+        const isValidPasswordInput = (el) => {
+            // Exclude search inputs
+            if (el.type === 'search') return false;
+
+            // Exclude by id/class containing search
+            const id = (el.id || '').toLowerCase();
+            const cls = (el.className || '').toLowerCase();
+            if (id.includes('search') || cls.includes('search')) return false;
+
+            // Exclude by placeholder containing search keywords
+            const ph = (el.placeholder || '').toLowerCase();
+            if (ph.includes('搜索') || ph.includes('search') || ph.includes('查找')) return false;
+
+            // Exclude hidden inputs
+            if (el.offsetParent === null && el.type !== 'hidden') return false;
+
+            // Exclude inputs that are not in a password-related container
+            // Check if there are keywords nearby that suggest this is a password input area
+            const parent = el.closest('form, div, section');
+            if (parent) {
+                const parentText = parent.innerText || '';
+                // If parent has password-related keywords, it's likely valid
+                if (/提取码|密码|访问码|code|pwd|password/i.test(parentText)) {
+                    return true;
+                }
+            }
+
+            // Default: allow if we can't determine otherwise
+            return true;
+        };
+
+        // Helper: Fill the input and click submit
+        const fillAndSubmit = (input) => {
+            if (hasFilledPassword) return; // Double check
+            hasFilledPassword = true; // Set flag immediately
+
+            console.log('[Text-to-Hyperlink] Found input, filling...');
+
+            // React-compatible value setter
+            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+            if (nativeInputValueSetter) {
+                nativeInputValueSetter.call(input, pwd);
+            } else {
+                input.value = pwd;
+            }
+
             input.dispatchEvent(new Event('input', { bubbles: true }));
             input.dispatchEvent(new Event('change', { bubbles: true }));
 
-            // Attempt simple submit
-            // Find nearby button
-            // Heuristic keywords: 提取, 下载, 确定, Submit, OK
+            // Attempt simple submit after a short delay
+            // Heuristic keywords: 提取, 下载, 确定, Submit, OK, 查看, 访问
             setTimeout(() => {
-                const buttons = document.querySelectorAll('button, a.btn, div.btn');
+                const buttons = document.querySelectorAll('button, a.btn, div.btn, .btn');
                 for (const btn of buttons) {
                     const t = btn.innerText || '';
-                    if (/提取|下载|确定|Submit|OK/.test(t)) {
+                    if (/提取|下载|确定|Submit|OK|查看|访问/.test(t)) {
+                        console.log('[Text-to-Hyperlink] Clicking submit button:', t.trim());
                         btn.click();
                         break;
                     }
                 }
-            }, 500);
+            }, 1000);
+        };
+
+        // Immediate attempt
+        let input = findInput();
+        if (input) {
+            fillAndSubmit(input);
+            return;
         }
+
+        // MutationObserver for dynamic content
+        const observer = new MutationObserver(() => {
+            if (hasFilledPassword) {
+                observer.disconnect();
+                return;
+            }
+            const input = findInput();
+            if (input) {
+                observer.disconnect();
+                fillAndSubmit(input);
+            }
+        });
+
+        observer.observe(document.body || document.documentElement, {
+            childList: true,
+            subtree: true
+        });
+
+        // Timeout: Stop observing after 15 seconds
+        setTimeout(() => {
+            observer.disconnect();
+            if (!hasFilledPassword) {
+                console.log('[Text-to-Hyperlink] Auto-fill timed out, input not found.');
+            }
+        }, 15000);
     }
 
     // Run auto-fill on load (Check Drive Enabled Status)
@@ -281,7 +394,7 @@
         // Protocol-less: www.xxx.com or xxx.com (common TLDs)
         // Strict tail matching: Only continue if followed by start of path/query/hash
         // Exclude if followed by - (e.g. WEB-DL) or @ (email)
-        regex: /((?:https?:\/\/|magnet:\?xt=|tg:\/\/|ms-windows-store:\/\/|ed2k:\/\/|thunder:\/\/)[^\s<>"']+|(?:\b[a-z0-9.-]+\.(?:com|cn|net|org|edu|gov|io|me|info|biz|top|vip|cc|co|uk|jp|de|fr|ru|au|us|ca|br|it|es|nl|se|no|pl|fi|gr|tr|cz|ro|hu|dk|be|at|ch|pt|ie|mx|sg|my|th|vn|ph|id|sa|za|nz|tw|hk|kr|in|tk|ml|ga|cf|gq|tv|ws|xyz|site|win|club|online|fun|wang|space|shop|ltd|work|live|store|bid|loan|click|wiki|tech|cloud|art|love|press|website|trade|date|party|review|video|web|link|mobi|pro|app|dev|ly)\b(?!@|-))|\bwww\.[a-z0-9.-]+)\b(?:[\/?#][^\s<>"']*)?)/gi,
+        regex: /((?:https?:\/\/|magnet:\?xt=|tg:\/\/|ms-windows-store:\/\/|ed2k:\/\/|thunder:\/\/)[^\s<>"'（）]+|(?:\b[a-z0-9.-]+\.(?:com|cn|net|org|edu|gov|io|me|info|biz|top|vip|cc|co|uk|jp|de|fr|ru|au|us|ca|br|it|es|nl|se|no|pl|fi|gr|tr|cz|ro|hu|dk|be|at|ch|pt|ie|mx|sg|my|th|vn|ph|id|sa|za|nz|tw|hk|kr|in|tk|ml|ga|cf|gq|tv|ws|xyz|site|win|club|online|fun|wang|space|shop|ltd|work|live|store|bid|loan|click|wiki|tech|cloud|art|love|press|website|trade|date|party|review|video|web|link|mobi|pro|app|dev|ly)\b(?!@|-))|\bwww\.[a-z0-9.-]+)\b(?:[\/?#][^\s<>"'（）]*)?/gi,
         observeOptions: {
             root: null, // viewport
             rootMargin: '200px', // Pre-load slightly outside viewport
@@ -327,6 +440,40 @@
             textNodes.push(node);
         }
         return textNodes;
+    }
+
+    /**
+     * Scan for EXISTING <a> tags to add auto-fill logic
+     */
+    function processExistingTags(root) {
+        if (!isDriveEnabled()) return;
+
+        const links = root.querySelectorAll ? root.querySelectorAll('a[href]') : [];
+        for (const link of links) {
+            if (link.hasAttribute(CONFIG.processedAttribute)) continue;
+
+            // Check if it's a supported cloud drive
+            const url = link.href;
+            const isDrive = DRIVE_RULES.some(rule => rule.regex.test(url));
+            if (!isDrive) continue;
+
+            // Mark as processed immediately to avoid loops
+            link.setAttribute(CONFIG.processedAttribute, 'true');
+
+            // Skip if already has password in hash
+            if (url.includes('#pwd=')) continue;
+
+            // Attempt to extract code
+            // Pass the element itself. matchIndex=0, matchEnd=length
+            // But extractCode expects text + range. 
+            // For Element, we treat it as if the whole element text is the link text.
+            const code = extractCode(link, 0, (link.innerText || '').length);
+
+            if (code) {
+                console.log('[Text-to-Hyperlink] Found code for existing link:', code);
+                link.href += `#pwd=${code}`;
+            }
+        }
     }
 
     /**
@@ -507,9 +654,13 @@
         if (textNodes.length > 0) {
             processChunk();
         }
+
+        // Also process existing links for auto-fill
+        processExistingTags(container);
     }
 
     // --- Observers ---
+    const relevantTags = 'p, div, span, li, td, h1, h2, h3, h4, h5, h6, article, section, blockquote';
 
     // IntersectionObserver for visibility
     const intersectionObserver = new IntersectionObserver((entries) => {
@@ -609,7 +760,6 @@
     // Initial pass: Observe all existing elements
     // Only if Linkify is enabled
     if (isLinkifyEnabled()) {
-        const relevantTags = 'p, div, span, li, td, h1, h2, h3, h4, h5, h6, article, section, blockquote';
         document.querySelectorAll(relevantTags).forEach(el => {
             intersectionObserver.observe(el);
         });
