@@ -3,7 +3,7 @@
 // @name:zh-CN   文本转超链接 + 网盘提取码自动填充
 // @name:zh-TW   文本转超链接 + 网盘提取码自动填充
 // @namespace    http://tampermonkey.net/
-// @version      1.0.21
+// @version      1.0.22
 // @description  Convert plain text URLs to clickable links and auto-fill cloud drive extraction codes.
 // @description:zh-CN 识别网页中的纯文本链接并转换为可点击的超链接，同时自动识别网盘链接并填充提取码。
 // @description:zh-TW 识别网页中的纯文本链接并转换为可点击的超链接，同时自动识别网盘链接并填充提取码。
@@ -405,7 +405,7 @@
         // Protocol-less: www.xxx.com or xxx.com (common TLDs)
         // Strict tail matching: Only continue if followed by start of path/query/hash
         // Exclude if followed by - (e.g. WEB-DL) or @ (email)
-        regex: /((?:https?:\/\/|magnet:\?xt=|tg:\/\/|ms-windows-store:\/\/|ed2k:\/\/|thunder:\/\/)[^\s<>"'（）]+|(?:\b[a-z0-9.-]+\.(?:com|cn|net|org|edu|gov|io|me|info|biz|top|vip|cc|co|uk|jp|de|fr|ru|au|us|ca|br|it|es|nl|se|no|pl|fi|gr|tr|cz|ro|hu|dk|be|at|ch|pt|ie|mx|sg|my|th|vn|ph|id|sa|za|nz|tw|hk|kr|in|tk|ml|ga|cf|gq|tv|ws|xyz|site|win|club|online|fun|wang|space|shop|ltd|work|live|store|bid|loan|click|wiki|tech|cloud|art|love|press|website|trade|date|party|review|video|web|link|mobi|pro|app|dev|ly)\b(?!@|-))|\bwww\.[a-z0-9.-]+)\b(?:[\/?#][^\s<>"'（）]*)?/gi,
+        regex: /((?:https?:\/\/|magnet:\?xt=|tg:\/\/|ms-windows-store:\/\/|ed2k:\/\/|thunder:\/\/)[^\s<>"'（）【】]+|(?:[a-z0-9.-]+\.(?:com|cn|net|org|edu|gov|io|me|info|biz|top|vip|cc|co|uk|jp|de|fr|ru|au|us|ca|br|it|es|nl|se|no|pl|fi|gr|tr|cz|ro|hu|dk|be|at|ch|pt|ie|mx|sg|my|th|vn|ph|id|sa|za|nz|tw|hk|kr|in|tk|ml|ga|cf|gq|tv|ws|xyz|site|win|club|online|fun|wang|space|shop|ltd|work|live|store|bid|loan|click|wiki|tech|cloud|art|love|press|website|trade|date|party|review|video|web|link|mobi|pro|app|dev|ly)\b(?!@|-))|www\.[a-z0-9.-]+)\b(?:[\/?#][^\s<>"'（）【】]*)?/gi,
         observeOptions: {
             root: null, // viewport
             rootMargin: '200px', // Pre-load slightly outside viewport
@@ -492,9 +492,11 @@
      */
     function trimUrl(url) {
         let end = url.length - 1;
-        const punctuation = /[,.;:!?"\)\]。]/; // Added Chinese period
+        const punctuation = /[,.;:!?"\)\]。】]/; // Added Chinese period and bracket
         const openParen = '(';
         const closeParen = ')';
+        const openBracket = '【';
+        const closeBracket = '】';
 
         // Simple balance check for parentheses
         // If we have balanced parens, we don't trim the last ')'
@@ -503,6 +505,8 @@
 
         let openCount = (url.match(/\(/g) || []).length;
         let closeCount = (url.match(/\)/g) || []).length;
+        let openBracketCount = (url.match(/【/g) || []).length;
+        let closeBracketCount = (url.match(/】/g) || []).length;
 
         while (end >= 0) {
             const char = url[end];
@@ -514,6 +518,15 @@
                         continue;
                     } else {
                         // Balanced or more opens, likely part of URL
+                        break;
+                    }
+                }
+                if (char === closeBracket) {
+                    if (closeBracketCount > openBracketCount) {
+                        closeBracketCount--;
+                        end--;
+                        continue;
+                    } else {
                         break;
                     }
                 }
