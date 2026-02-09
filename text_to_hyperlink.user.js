@@ -3,7 +3,7 @@
 // @name:zh-CN   文本转超链接 + 网盘提取码自动填充
 // @name:zh-TW   文本转超链接 + 网盘提取码自动填充
 // @namespace    http://tampermonkey.net/
-// @version      1.0.17
+// @version      1.0.18
 // @description  Convert plain text URLs to clickable links and auto-fill cloud drive extraction codes.
 // @description:zh-CN 识别网页中的纯文本链接并转换为可点击的超链接，同时自动识别网盘链接并填充提取码。
 // @description:zh-TW 识别网页中的纯文本链接并转换为可点击的超链接，同时自动识别网盘链接并填充提取码。
@@ -327,8 +327,10 @@
             input.dispatchEvent(new Event('input', { bubbles: true }));
             input.dispatchEvent(new Event('change', { bubbles: true }));
 
-            // Attempt simple submit after a short delay
+            // Attempt simple submit after a delay
             // Heuristic keywords: 提取, 下载, 确定, Submit, OK, 查看, 访问
+            // Use longer delay for Tianyi Cloud (189.cn) as it needs more time
+            const clickDelay = location.hostname.includes('189.cn') ? 1000 : 300;
             setTimeout(() => {
                 const buttons = document.querySelectorAll('button, a.btn, div.btn, .btn');
                 for (const btn of buttons) {
@@ -339,7 +341,7 @@
                         break;
                     }
                 }
-            }, 1000);
+            }, clickDelay);
         };
 
         // Immediate attempt
