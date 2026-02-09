@@ -3,7 +3,7 @@
 // @name:zh-CN   文本转超链接 + 网盘提取码自动填充
 // @name:zh-TW   文本转超链接 + 网盘提取码自动填充
 // @namespace    http://tampermonkey.net/
-// @version      1.0.24
+// @version      1.0.39
 // @description  Convert plain text URLs to clickable links and auto-fill cloud drive extraction codes.
 // @description:zh-CN 识别网页中的纯文本链接并转换为可点击的超链接，同时自动识别网盘链接并填充提取码。
 // @description:zh-TW 识别网页中的纯文本链接并转换为可点击的超链接，同时自动识别网盘链接并填充提取码。
@@ -13,11 +13,16 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        unsafeWindow
 // @run-at       document-end
 // ==/UserScript==
 
 (function () {
     'use strict';
+
+    // Enable debug mode for users to check logs in console
+    const DEBUG_MODE = true;
+    const log = (...args) => DEBUG_MODE && console.log('[Text-to-Hyperlink]', ...args);
 
     // --- Settings & Storage Keys ---
     const hostname = window.location.hostname;
@@ -88,31 +93,20 @@
 
     // Register Menu Commands
     function updateMenuCommand() {
-        // 1. Global Linkify
         GM_registerMenuCommand(getGlobalLinkify() ? STRINGS.globalLinkifyOff : STRINGS.globalLinkifyOn, toggleGlobalLinkify);
-
-        // 2. Global Drive
         GM_registerMenuCommand(getGlobalDrive() ? STRINGS.globalDriveOff : STRINGS.globalDriveOn, toggleGlobalDrive);
-
-        // 3. Site Linkify
         const siteLinkifyBlacklisted = getBlacklistLinkify().includes(hostname);
         GM_registerMenuCommand(siteLinkifyBlacklisted ? STRINGS.siteLinkifyOn : STRINGS.siteLinkifyOff, toggleSiteLinkify);
-
-        // 4. Site Drive
         const siteDriveBlacklisted = getBlacklistDrive().includes(hostname);
         GM_registerMenuCommand(siteDriveBlacklisted ? STRINGS.siteDriveOn : STRINGS.siteDriveOff, toggleSiteDrive);
     }
 
-    // Initial Menu Registration
     updateMenuCommand();
 
-    // Check Linkify Status (Drive status is checked inside linkifyTextNode and autoFill)
     if (!isLinkifyEnabled()) {
         console.log(STRINGS.disabledLog);
-        // Note: We still run autoFillDrivePassword because it might be a target page opened from elsewhere
     }
 
-    // New Configuration for Drives
     const DRIVE_RULES = [
         { name: 'baidu', regex: /pan\.baidu\.com/, codeParams: ['pwd', 'code', '提取码'] },
         { name: 'aliyun', regex: /alipan\.com|aliyundrive\.com/, codeParams: ['pwd', 'code', '提取码'] },
@@ -123,29 +117,21 @@
         { name: 'tianyi', regex: /cloud\.189\.cn/, codeParams: ['pwd', 'code', '访问码'] }
     ];
 
-    /**
-     * Attempt to find extraction code near the link (Front & Back, Cross-Node, Parent-Sibling)
-     * Supports both Text nodes and Element nodes (for existing links)
-     */
     function extractCode(node, matchIndex, matchEnd) {
-        // If node is an Element (existing link), treat matchIndex as 0 and text as its textContent
         const isElement = node.nodeType === Node.ELEMENT_NODE;
         const text = isElement ? (node.innerText || node.textContent) : node.nodeValue;
         const SEARCH_RANGE = 120;
 
-        // Helper to get text from a node (Text or Element)
         const getTextFromNode = (n) => {
             if (!n) return '';
             if (n.nodeType === Node.TEXT_NODE) return n.nodeValue;
             if (n.nodeType === Node.ELEMENT_NODE) {
-                // Ignore scripts and styles for text extraction
                 if (['SCRIPT', 'STYLE', 'NOSCRIPT'].includes(n.tagName)) return '';
                 return n.innerText || n.textContent || '';
             }
             return '';
         };
 
-        // Helper to find next/prev meaningful sibling (skipping whitespace/br)
         const getSiblingText = (startNode, direction = 'next', maxSteps = 10) => {
             let current = startNode;
             let result = '';
@@ -154,53 +140,31 @@
             while (current && steps < maxSteps) {
                 current = direction === 'next' ? current.nextSibling : current.previousSibling;
                 if (!current) break;
-
-                // Skip pure whitespace text nodes
-                if (current.nodeType === Node.TEXT_NODE && !current.nodeValue.trim()) {
-                    continue;
-                }
-
-                // Skip <br>
-                if (current.nodeType === Node.ELEMENT_NODE && current.tagName === 'BR') {
-                    continue;
-                }
-
-                // Found meaningful content
+                if (current.nodeType === Node.TEXT_NODE && !current.nodeValue.trim()) continue;
+                if (current.nodeType === Node.ELEMENT_NODE && current.tagName === 'BR') continue;
                 const content = getTextFromNode(current);
                 if (content.trim()) {
                     if (direction === 'next') result += '\n' + content;
                     else result = content + '\n' + result;
-
-                    if (result.length > 50) break; // Optimization: stop if we have enough context
+                    if (result.length > 50) break;
                     steps++;
                 }
             }
             return result;
         };
 
-        // Regex: key + strict separator + 4 chars (Global for iter)
         const codeRegex = /(?:code|pwd|提取码|密码|访问码)\s*[:：]?\s*([a-zA-Z0-9]{4})/gi;
-
-        // --- 1. Search Text AFTER Link (Priority) ---
-        // Range: matchEnd -> matchEnd + SEARCH_RANGE
         let textAfter = text.substring(matchEnd, matchEnd + SEARCH_RANGE);
         textAfter += getSiblingText(node, 'next');
 
-        // 1b. Parent Next Sibling (Block Level / Bubble Up)
-        // Check up to 5 levels up for adjacent content
         let parent = node.parentNode;
         let limit = 5;
-        let pNode = node; // Current node in the traversal
+        let pNode = node;
 
         while (parent && limit > 0) {
-            // If the current node was the last child, check parent's next sibling
             if (!pNode.nextSibling) {
-                textAfter += getSiblingText(parent, 'next'); // Check parent's siblings
+                textAfter += getSiblingText(parent, 'next');
             } else {
-                // If current node had siblings, we already checked them (via getSiblingText on node). 
-                // Wait.. getSiblingText only scans immediate siblings. 
-                // Logic update: We should check "next siblings of parent" regardless, 
-                // because the "next logical text" might be in the next paragraph (parent's sibling).
                 textAfter += getSiblingText(parent, 'next');
             }
             pNode = parent;
@@ -208,17 +172,13 @@
             limit--;
         }
 
-        // Find Closest After = FIRST match
         codeRegex.lastIndex = 0;
         const matchAfter = codeRegex.exec(textAfter);
         if (matchAfter) return matchAfter[1];
 
-        // --- 2. Search Text BEFORE Link (Secondary) ---
-        // Range: matchIndex - SEARCH_RANGE -> matchIndex
         let textBefore = text.substring(Math.max(0, matchIndex - SEARCH_RANGE), matchIndex);
         textBefore = getSiblingText(node, 'prev') + textBefore;
 
-        // Bubble up for previous text
         parent = node.parentNode;
         limit = 5;
 
@@ -228,7 +188,6 @@
             limit--;
         }
 
-        // Find Closest Before = LAST match
         codeRegex.lastIndex = 0;
         let bestBefore = null;
         let m;
@@ -239,14 +198,10 @@
         return bestBefore;
     }
 
-    /**
-     * Auto-fill logic for Cloud Drive pages
-     * Uses MutationObserver for reliable element detection
-     */
-    let hasFilledPassword = false; // Debounce flag
+    let hasFilledPassword = false;
 
     function autoFillDrivePassword() {
-        if (hasFilledPassword) return; // Prevent multiple executions
+        if (hasFilledPassword) return;
 
         const hash = location.hash;
         if (!hash || !hash.includes('pwd=')) return;
@@ -254,21 +209,15 @@
         const pwd = hash.split('pwd=')[1].split('&')[0];
         if (!pwd) return;
 
-        console.log('[Text-to-Hyperlink] Auto-filling password:', pwd);
-
-        // Heuristic Selectors (ordered by specificity)
         const selectors = [
-            '#code_txt', // 189 Cloud specific
-            '#accessCode', '#pwd', '#code', // ID
-            'input[id*="code"]', 'input[id*="pwd"]', // Fuzzy ID
-            'input[name="accessCode"]', 'input[name="pwd"]', // Name
-            '.input-code', // Class
-            'input[placeholder*="提取码"]', 'input[placeholder*="密码"]', 'input[placeholder*="Code"]', // Placeholder
-            '.ant-input[type="text"]', // Alipan specific
-            'input[type="password"]' // Fallback
+            '#code_txt', '#accessCode', '#pwd', '#code',
+            'input[id*="code"]', 'input[id*="pwd"]',
+            'input[name="accessCode"]', 'input[name="pwd"]',
+            '.input-code',
+            'input[placeholder*="提取码"]', 'input[placeholder*="密码"]', 'input[placeholder*="Code"]',
+            '.ant-input[type="text"]', 'input[type="password"]'
         ];
 
-        // Helper: Try to find input from selectors
         const findInput = () => {
             for (const sel of selectors) {
                 const el = document.querySelector(sel);
@@ -277,46 +226,26 @@
             return null;
         };
 
-        // Helper: Check if input is a valid password input (not a search box)
         const isValidPasswordInput = (el) => {
-            // Exclude search inputs
             if (el.type === 'search') return false;
-
-            // Exclude by id/class containing search
             const id = (el.id || '').toLowerCase();
             const cls = (el.className || '').toLowerCase();
             if (id.includes('search') || cls.includes('search')) return false;
-
-            // Exclude by placeholder containing search keywords
             const ph = (el.placeholder || '').toLowerCase();
             if (ph.includes('搜索') || ph.includes('search') || ph.includes('查找')) return false;
-
-            // Exclude hidden inputs
             if (el.offsetParent === null && el.type !== 'hidden') return false;
-
-            // Exclude inputs that are not in a password-related container
-            // Check if there are keywords nearby that suggest this is a password input area
             const parent = el.closest('form, div, section');
             if (parent) {
                 const parentText = parent.innerText || '';
-                // If parent has password-related keywords, it's likely valid
-                if (/提取码|密码|访问码|code|pwd|password/i.test(parentText)) {
-                    return true;
-                }
+                if (/提取码|密码|访问码|code|pwd|password/i.test(parentText)) return true;
             }
-
-            // Default: allow if we can't determine otherwise
             return true;
         };
 
-        // Helper: Fill the input and click submit
         const fillAndSubmit = (input) => {
-            if (hasFilledPassword) return; // Double check
-            hasFilledPassword = true; // Set flag immediately
+            if (hasFilledPassword) return;
+            hasFilledPassword = true;
 
-            console.log('[Text-to-Hyperlink] Found input, filling...');
-
-            // React-compatible value setter
             const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
             if (nativeInputValueSetter) {
                 nativeInputValueSetter.call(input, pwd);
@@ -327,25 +256,17 @@
             input.dispatchEvent(new Event('input', { bubbles: true }));
             input.dispatchEvent(new Event('change', { bubbles: true }));
 
-            // Attempt simple submit after a delay
-            // Heuristic keywords: 提取, 下载, 确定, Submit, OK, 查看, 访问
-            // Use longer delay for Tianyi Cloud (189.cn) as it needs more time
             const clickDelay = location.hostname.includes('189.cn') ? 1000 : 300;
             setTimeout(() => {
-                // First check for specific button IDs
                 const specificBtn = document.querySelector('#submitBtn');
                 if (specificBtn) {
-                    console.log('[Text-to-Hyperlink] Clicking submit button: #submitBtn');
                     specificBtn.click();
                     return;
                 }
-
-                // Fallback: search by keywords
                 const buttons = document.querySelectorAll('button, a.btn, div.btn, .btn');
                 for (const btn of buttons) {
                     const t = btn.innerText || '';
                     if (/提取|下载|确定|Submit|OK|查看|访问/.test(t)) {
-                        console.log('[Text-to-Hyperlink] Clicking submit button:', t.trim());
                         btn.click();
                         break;
                     }
@@ -353,14 +274,12 @@
             }, clickDelay);
         };
 
-        // Immediate attempt
         let input = findInput();
         if (input) {
             fillAndSubmit(input);
             return;
         }
 
-        // MutationObserver for dynamic content
         const observer = new MutationObserver(() => {
             if (hasFilledPassword) {
                 observer.disconnect();
@@ -378,16 +297,11 @@
             subtree: true
         });
 
-        // Timeout: Stop observing after 15 seconds
         setTimeout(() => {
             observer.disconnect();
-            if (!hasFilledPassword) {
-                console.log('[Text-to-Hyperlink] Auto-fill timed out, input not found.');
-            }
         }, 15000);
     }
 
-    // Run auto-fill on load (Check Drive Enabled Status)
     if (isDriveEnabled()) {
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', autoFillDrivePassword);
@@ -396,27 +310,17 @@
         }
     }
 
-    // Configuration
     const CONFIG = {
-        // Regex for various protocols
-        // URL: http/https
-        // Magnet: magnet:?xt=...
-        // Custom: tg://, ms-windows-store://, ed2k://, thunder://
-        // Protocol-less: www.xxx.com or xxx.com (common TLDs)
-        // Strict tail matching: Only continue if followed by start of path/query/hash
-        // Exclude if followed by - (e.g. WEB-DL) or @ (email)
-        regex: /((?:https?:\/\/|magnet:\?xt=|tg:\/\/|ms-windows-store:\/\/|ed2k:\/\/|thunder:\/\/)[^\s<>"'（）]+|(?:\b[a-z0-9.-]+\.(?:com|cn|net|org|edu|gov|io|me|info|biz|top|vip|cc|co|uk|jp|de|fr|ru|au|us|ca|br|it|es|nl|se|no|pl|fi|gr|tr|cz|ro|hu|dk|be|at|ch|pt|ie|mx|sg|my|th|vn|ph|id|sa|za|nz|tw|hk|kr|in|tk|ml|ga|cf|gq|tv|ws|xyz|site|win|club|online|fun|wang|space|shop|ltd|work|live|store|bid|loan|click|wiki|tech|cloud|art|love|press|website|trade|date|party|review|video|web|link|mobi|pro|app|dev|ly)\b(?!@|-))|\bwww\.[a-z0-9.-]+)\b(?:[\/?#][^\s<>"'（）]*)?/gi,
+        // v1.0.39: Reverted to cleaner Regex with specific Negative Lookbehind for boundary handling
+        regex: /((?:https?:\/\/|magnet:\?xt=|tg:\/\/|ms-windows-store:\/\/|ed2k:\/\/|thunder:\/\/)[^\s<>"'（）]+|(?:\b|(?<![a-zA-Z0-9@._-]))[a-z0-9.-]+\.(?:com|cn|net|org|edu|gov|io|me|info|biz|top|vip|cc|co|uk|jp|de|fr|ru|au|us|ca|br|it|es|nl|se|no|pl|fi|gr|tr|cz|ro|hu|dk|be|at|ch|pt|ie|mx|sg|my|th|vn|ph|id|sa|za|nz|tw|hk|kr|in|tk|ml|ga|cf|gq|tv|ws|xyz|site|win|club|online|fun|wang|space|shop|ltd|work|live|store|bid|loan|click|wiki|tech|cloud|art|love|press|website|trade|date|party|review|video|web|link|mobi|pro|app|dev|ly)\b(?!@|-))|\bwww\.[a-z0-9.-]+(?:[\/?#][^\s<>"'（）]*)?/gi,
         observeOptions: {
-            root: null, // viewport
-            rootMargin: '200px', // Pre-load slightly outside viewport
-            threshold: 0 // Trigger as soon as any part is visible
+            root: null,
+            rootMargin: '200px',
+            threshold: 0
         },
         processedAttribute: 'data-linkified'
     };
 
-    /**
-     * Text Walker to find text nodes not inside interactive elements
-     */
     function getTextNodes(root) {
         const textNodes = [];
         const walker = document.createTreeWalker(
@@ -424,21 +328,17 @@
             NodeFilter.SHOW_TEXT,
             {
                 acceptNode: function (node) {
-                    // Skip if parent is already a link or interactive element
                     const parent = node.parentNode;
                     if (!parent) return NodeFilter.FILTER_REJECT;
 
                     const tag = parent.tagName.toLowerCase();
-                    const skipTags = ['a', 'script', 'style', 'textarea', 'input', 'button', 'select', 'option', 'code', 'pre'];
+                    const skipTags = ['a', 'script', 'style', 'textarea', 'input', 'button', 'select', 'option', 'pre'];
                     if (skipTags.includes(tag)) return NodeFilter.FILTER_REJECT;
 
-                    // Skip contenteditable
                     if (parent.isContentEditable) return NodeFilter.FILTER_REJECT;
 
-                    // Allow if parent is the root we are currently processing
                     if (parent === root) return NodeFilter.FILTER_ACCEPT;
 
-                    // Skip if parent is already processed and it's NOT the root
                     if (parent.hasAttribute && parent.hasAttribute(CONFIG.processedAttribute)) return NodeFilter.FILTER_REJECT;
 
                     return NodeFilter.FILTER_ACCEPT;
@@ -453,54 +353,28 @@
         return textNodes;
     }
 
-    /**
-     * Scan for EXISTING <a> tags to add auto-fill logic
-     */
     function processExistingTags(root) {
         if (!isDriveEnabled()) return;
 
         const links = root.querySelectorAll ? root.querySelectorAll('a[href]') : [];
         for (const link of links) {
             if (link.hasAttribute(CONFIG.processedAttribute)) continue;
-
-            // Check if it's a supported cloud drive
             const url = link.href;
             const isDrive = DRIVE_RULES.some(rule => rule.regex.test(url));
             if (!isDrive) continue;
-
-            // Mark as processed immediately to avoid loops
             link.setAttribute(CONFIG.processedAttribute, 'true');
-
-            // Skip if already has password in hash
             if (url.includes('#pwd=')) continue;
-
-            // Attempt to extract code
-            // Pass the element itself. matchIndex=0, matchEnd=length
-            // But extractCode expects text + range. 
-            // For Element, we treat it as if the whole element text is the link text.
             const code = extractCode(link, 0, (link.innerText || '').length);
-
             if (code) {
-                console.log('[Text-to-Hyperlink] Found code for existing link:', code);
                 link.href += `#pwd=${code}`;
             }
         }
     }
 
-    /**
-     * Trim trailing punctuation from URL
-     */
     function trimUrl(url) {
         let end = url.length - 1;
-        const punctuation = /[,.;:!?"\)\]。]/; // Added Chinese period
-        const openParen = '(';
+        const punctuation = /[,.;:!?"\)\]。]/;
         const closeParen = ')';
-
-        // Simple balance check for parentheses
-        // If we have balanced parens, we don't trim the last ')'
-        // E.g. https://site.com/foo_(bar) -> keep ')'
-        // E.g. (https://site.com/foo) -> trim ')'
-
         let openCount = (url.match(/\(/g) || []).length;
         let closeCount = (url.match(/\)/g) || []).length;
 
@@ -513,7 +387,6 @@
                         end--;
                         continue;
                     } else {
-                        // Balanced or more opens, likely part of URL
                         break;
                     }
                 }
@@ -525,14 +398,9 @@
         return url.substring(0, end + 1);
     }
 
-    /**
-     * Convert text node to fragment with links
-     */
     function linkifyTextNode(node) {
         try {
             const text = node.nodeValue;
-            // Create a local regex to ensure thread safety (no lastIndex pollution)
-            // matching valid URL patterns including those with protocols
             const regex = new RegExp(CONFIG.regex.source, 'gi');
 
             if (!text || !regex.test(text)) return;
@@ -542,49 +410,38 @@
             let match;
             let matchCount = 0;
 
-            // Reset regex state (implicitly 0 for new instance)
             regex.lastIndex = 0;
 
             while ((match = regex.exec(text)) !== null) {
                 let url = match[0];
                 const originalUrl = url;
-
-                // Trim trailing punctuation
                 url = trimUrl(url);
 
                 const matchIndex = match.index;
-                // Safety check for infinite loops or weird regex behavior
                 if (matchIndex < lastIndex) break;
 
                 const preText = text.substring(lastIndex, matchIndex);
 
-                // Add preceding text
                 if (preText.length > 0) {
                     fragment.appendChild(document.createTextNode(preText));
                 }
 
-                // Check protocol
                 let href = url;
                 if (!/^[a-z]+:\/\/|magnet:/.test(url)) {
                     href = 'https://' + url;
                 }
 
-                // Check for Drive Code
-                const matchEnd = matchIndex + originalUrl.length;
-                // Only check text immediately following if drive is enabled
                 if (isDriveEnabled()) {
-                    // Check if it's a known drive
                     const isDrive = DRIVE_RULES.some(rule => rule.regex.test(url));
                     if (isDrive) {
-                        const code = extractCode(node, matchIndex, matchEnd); // Fixed args
+                        const matchEnd = matchIndex + originalUrl.length;
+                        const code = extractCode(node, matchIndex, matchEnd);
                         if (code) {
                             href += `#pwd=${code}`;
-                            // Note: We don't remove the code from text, just append to href
                         }
                     }
                 }
 
-                // Create link
                 const a = document.createElement('a');
                 a.href = href;
                 a.textContent = url;
@@ -592,8 +449,6 @@
                 a.style.textDecoration = 'underline';
                 a.target = '_blank';
                 a.rel = 'noopener noreferrer';
-
-                // Prevent recursive processing
                 a.setAttribute(CONFIG.processedAttribute, 'true');
 
                 fragment.appendChild(a);
@@ -607,7 +462,6 @@
                 matchCount++;
             }
 
-            // Add remaining text
             if (lastIndex < text.length) {
                 fragment.appendChild(document.createTextNode(text.substring(lastIndex)));
             }
@@ -622,10 +476,9 @@
         }
     }
 
-    /**
-     * Process a container element
-     */
     function processContainer(container) {
+        // Critical change: We still check 'processedAttribute', but now we expect MutationObserver
+        // to have aggressively cleared it from relevant ancestors if needed.
         if (container.hasAttribute(CONFIG.processedAttribute)) {
             return;
         }
@@ -634,8 +487,6 @@
 
         const textNodes = getTextNodes(container);
 
-        // Batch process to avoid freezing UI
-        // Simple chunking
         const chunkSize = 50;
         let index = 0;
 
@@ -643,7 +494,6 @@
             const end = Math.min(index + chunkSize, textNodes.length);
             for (let i = index; i < end; i++) {
                 const node = textNodes[i];
-                // Double check if node is still in DOM
                 if (!node.parentNode) continue;
 
                 const newContent = linkifyTextNode(node);
@@ -653,7 +503,6 @@
             }
             index = end;
             if (index < textNodes.length) {
-                // Schedule next chunk
                 requestAnimationFrame(processChunk);
             }
         }
@@ -661,34 +510,14 @@
         if (textNodes.length > 0) {
             processChunk();
         }
-
-        // Also process existing links for auto-fill
         processExistingTags(container);
     }
 
     // --- Observers ---
-    const relevantTags = 'p, div, span, li, td, h1, h2, h3, h4, h5, h6, article, section, blockquote, font, u';
+    const relevantTags = 'p, div, span, li, td, h1, h2, h3, h4, h5, h6, article, section, blockquote, font, u, cite, em, strong, b, i, code';
 
-    // IntersectionObserver for visibility
     const intersectionObserver = new IntersectionObserver((entries) => {
-        // Filter intersecting entries
         const visibleEntries = entries.filter(entry => entry.isIntersecting).map(entry => entry.target);
-
-        // Sort by depth (deepest first) to ensure children are processed before parents
-        // This allows the walker to skip already processed children via the attribute check
-        visibleEntries.sort((a, b) => {
-            // Calculate depth only when needed (caching could be better but this is likely fast enough for batch)
-            const getDepth = (n) => {
-                let d = 0;
-                while (n.parentNode) {
-                    n = n.parentNode;
-                    d++;
-                }
-                return d;
-            };
-            return getDepth(b) - getDepth(a);
-        });
-
         visibleEntries.forEach(target => {
             processContainer(target);
             intersectionObserver.unobserve(target);
@@ -696,86 +525,111 @@
     }, CONFIG.observeOptions);
 
 
-    // MutationObserver for dynamic content
     let timeout = null;
     const mutationObserver = new MutationObserver((mutations) => {
-        // We use a set to track unique elements to re-observe/process
         const elementsToUpdate = new Set();
+        // New Set to track ancestors that need attribute clearing
+        const ancestorsToClear = new Set();
 
         mutations.forEach(mutation => {
-            // Check if this mutation is caused by us
-            // Heuristic: If addedNodes contains an 'A' tag with our attribute, it's likely us.
-            let isSelfTriggered = false;
-
-            // Check added nodes
-            if (mutation.addedNodes.length > 0) {
-                for (const node of mutation.addedNodes) {
-                    if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'A' && node.hasAttribute(CONFIG.processedAttribute)) {
-                        isSelfTriggered = true;
-                        break;
-                    }
-                }
-            }
-
-            if (isSelfTriggered) return;
-
             if (mutation.type === 'childList') {
                 mutation.addedNodes.forEach(node => {
                     if (node.nodeType === Node.ELEMENT_NODE) {
-                        // Ignore debug log
-                        if (node.id === 'tm-debug-log' || node.closest && node.closest('#tm-debug-log')) return;
+                        // Check if it's our own link (prevent infinite loop)
+                        if (node.tagName === 'A' && node.hasAttribute(CONFIG.processedAttribute)) {
+                            return;
+                        }
 
                         elementsToUpdate.add(node);
-                        // Also add children if needed, but IO will handle them if we just observe the root
-                        const children = node.querySelectorAll && node.querySelectorAll(relevantTags);
-                        if (children) children.forEach(c => elementsToUpdate.add(c));
-                    } else if (node.nodeType === Node.TEXT_NODE) {
-                        // If text is added, we need to process the parent
-                        if (node.parentNode && node.parentNode.nodeType === Node.ELEMENT_NODE) {
-                            // Ignore debug log
-                            if (node.parentNode.id === 'tm-debug-log' || node.parentNode.closest('#tm-debug-log')) return;
 
+                        // Critical Fix: Walk up the tree to check if any ancestor is marked processed
+                        // If so, we must clear it to allow this new child to be processed.
+                        // We check up to 10 levels or until body
+                        let parent = node.parentNode;
+                        let levels = 0;
+                        while (parent && parent !== document.body && levels < 10) {
+                            if (parent.hasAttribute(CONFIG.processedAttribute)) {
+                                ancestorsToClear.add(parent);
+                            }
+                            parent = parent.parentNode;
+                            levels++;
+                        }
+
+                    } else if (node.nodeType === Node.TEXT_NODE) {
+                        if (node.parentNode && node.parentNode.nodeType === Node.ELEMENT_NODE) {
                             elementsToUpdate.add(node.parentNode);
+                            // Also check ancestors for text node's parent
+                            let parent = node.parentNode;
+                            let levels = 0;
+                            while (parent && parent !== document.body && levels < 10) {
+                                if (parent.hasAttribute(CONFIG.processedAttribute)) {
+                                    ancestorsToClear.add(parent);
+                                }
+                                parent = parent.parentNode;
+                                levels++;
+                            }
+
                         }
                     }
                 });
             } else if (mutation.type === 'characterData') {
-                // If text content changes directly
                 if (mutation.target.nodeType === Node.TEXT_NODE && mutation.target.parentNode) {
-                    if (mutation.target.parentNode.id === 'tm-debug-log' || mutation.target.parentNode.closest('#tm-debug-log')) return;
                     elementsToUpdate.add(mutation.target.parentNode);
                 }
             }
         });
 
+        // 1. Clear ancestors first
+        if (ancestorsToClear.size > 0) {
+            ancestorsToClear.forEach(el => {
+                el.removeAttribute(CONFIG.processedAttribute);
+            });
+        }
+
+        // 2. Schedule updates
         if (elementsToUpdate.size > 0) {
             if (timeout) clearTimeout(timeout);
             timeout = setTimeout(() => {
                 elementsToUpdate.forEach(el => {
-                    // Reset processed state
+                    // Also clear attribute on the element itself if it was somehow marked
                     if (el.removeAttribute) {
                         el.removeAttribute(CONFIG.processedAttribute);
                     }
-                    // Re-observe
-                    intersectionObserver.observe(el);
+                    processContainer(el);
                 });
-            }, 200);
+            }, 100);
         }
     });
 
-    // Initial pass: Observe all existing elements
-    // Only if Linkify is enabled
     if (isLinkifyEnabled()) {
         document.querySelectorAll(relevantTags).forEach(el => {
             intersectionObserver.observe(el);
         });
 
-        // Start mutation observer
         mutationObserver.observe(document.body, {
             childList: true,
             subtree: true,
-            characterData: true // Watch for text changes
+            characterData: true
         });
+    }
+
+    // Expose debug helpers
+    if (typeof unsafeWindow !== 'undefined') {
+        unsafeWindow.debugLinkify = () => {
+            console.log('Linkify Debug: Checking...');
+            console.log('Global Enabled:', isLinkifyEnabled());
+            console.log('Hostname:', hostname);
+            const example = document.querySelector('cite');
+            if (example) {
+                console.log('Found cite tag:', example);
+                console.log('Processed attr:', example.getAttribute(CONFIG.processedAttribute));
+            }
+        };
+        unsafeWindow.forceLinkify = () => {
+            console.log('Forcing Linkify on Body...');
+            document.body.removeAttribute(CONFIG.processedAttribute);
+            processContainer(document.body);
+        };
     }
 
 })();
