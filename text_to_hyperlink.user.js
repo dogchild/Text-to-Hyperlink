@@ -3,7 +3,7 @@
 // @name:zh-CN   文本转超链接 + 网盘提取码自动填充
 // @name:zh-TW   文本转超链接 + 网盘提取码自动填充
 // @namespace    http://tampermonkey.net/
-// @version      1.0.39
+// @version      1.0.40
 // @description  Convert plain text URLs to clickable links and auto-fill cloud drive extraction codes.
 // @description:zh-CN 识别网页中的纯文本链接并转换为可点击的超链接，同时自动识别网盘链接并填充提取码。
 // @description:zh-TW 识别网页中的纯文本链接并转换为可点击的超链接，同时自动识别网盘链接并填充提取码。
@@ -586,16 +586,30 @@
             });
         }
 
-        // 2. Schedule updates
+        // 2. Schedule updates (Lazy Load via IntersectionObserver)
         if (elementsToUpdate.size > 0) {
             if (timeout) clearTimeout(timeout);
             timeout = setTimeout(() => {
                 elementsToUpdate.forEach(el => {
                     // Also clear attribute on the element itself if it was somehow marked
+                    // (This ensures we don't skip it if we observe it)
                     if (el.removeAttribute) {
                         el.removeAttribute(CONFIG.processedAttribute);
                     }
-                    processContainer(el);
+
+                    // Instead of processing immediately, we recognize this is new content.
+                    // We want to apply the same "Lazy Load" logic as the initial page load.
+                    // So we observe the element (if relevant) and its children.
+
+                    if (el.matches && el.matches(relevantTags)) {
+                        intersectionObserver.observe(el);
+                    }
+
+                    if (el.querySelectorAll) {
+                        el.querySelectorAll(relevantTags).forEach(child => {
+                            intersectionObserver.observe(child);
+                        });
+                    }
                 });
             }, 100);
         }
