@@ -3,7 +3,7 @@
 // @name:zh-CN   文本转超链接 + 网盘提取码自动填充
 // @name:zh-TW   文本转超链接 + 网盘提取码自动填充
 // @namespace    http://tampermonkey.net/
-// @version      1.0.40
+// @version      1.1.0
 // @description  Convert plain text URLs to clickable links and auto-fill cloud drive extraction codes.
 // @description:zh-CN 识别网页中的纯文本链接并转换为可点击的超链接，同时自动识别网盘链接并填充提取码。
 // @description:zh-TW 识别网页中的纯文本链接并转换为可点击的超链接，同时自动识别网盘链接并填充提取码。
@@ -13,7 +13,6 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM_getValue
 // @grant        GM_setValue
-// @grant        unsafeWindow
 // @run-at       document-end
 // ==/UserScript==
 
@@ -21,7 +20,7 @@
     'use strict';
 
     // Enable debug mode for users to check logs in console
-    const DEBUG_MODE = true;
+    const DEBUG_MODE = false;
     const log = (...args) => DEBUG_MODE && console.log('[Text-to-Hyperlink]', ...args);
 
     // --- Settings & Storage Keys ---
@@ -311,7 +310,7 @@
     }
 
     const CONFIG = {
-        // v1.0.39: Reverted to cleaner Regex with specific Negative Lookbehind for boundary handling
+        // v1.0.41: Optimized Regex and preserved specific settings
         regex: /((?:https?:\/\/|magnet:\?xt=|tg:\/\/|ms-windows-store:\/\/|ed2k:\/\/|thunder:\/\/)[^\s<>"'（）]+|(?:\b|(?<![a-zA-Z0-9@._-]))[a-z0-9.-]+\.(?:com|cn|net|org|edu|gov|io|me|info|biz|top|vip|cc|co|uk|jp|de|fr|ru|au|us|ca|br|it|es|nl|se|no|pl|fi|gr|tr|cz|ro|hu|dk|be|at|ch|pt|ie|mx|sg|my|th|vn|ph|id|sa|za|nz|tw|hk|kr|in|tk|ml|ga|cf|gq|tv|ws|xyz|site|win|club|online|fun|wang|space|shop|ltd|work|live|store|bid|loan|click|wiki|tech|cloud|art|love|press|website|trade|date|party|review|video|web|link|mobi|pro|app|dev|ly)\b(?!@|-))|\bwww\.[a-z0-9.-]+(?:[\/?#][^\s<>"'（）]*)?/gi,
         observeOptions: {
             root: null,
@@ -477,8 +476,6 @@
     }
 
     function processContainer(container) {
-        // Critical change: We still check 'processedAttribute', but now we expect MutationObserver
-        // to have aggressively cleared it from relevant ancestors if needed.
         if (container.hasAttribute(CONFIG.processedAttribute)) {
             return;
         }
@@ -526,91 +523,54 @@
 
 
     let timeout = null;
+    let pendingElements = new Set();
+
     const mutationObserver = new MutationObserver((mutations) => {
-        const elementsToUpdate = new Set();
-        // New Set to track ancestors that need attribute clearing
-        const ancestorsToClear = new Set();
+        let hasNewElements = false;
 
         mutations.forEach(mutation => {
             if (mutation.type === 'childList') {
                 mutation.addedNodes.forEach(node => {
                     if (node.nodeType === Node.ELEMENT_NODE) {
-                        // Check if it's our own link (prevent infinite loop)
-                        if (node.tagName === 'A' && node.hasAttribute(CONFIG.processedAttribute)) {
-                            return;
-                        }
-
-                        elementsToUpdate.add(node);
-
-                        // Critical Fix: Walk up the tree to check if any ancestor is marked processed
-                        // If so, we must clear it to allow this new child to be processed.
-                        // We check up to 10 levels or until body
-                        let parent = node.parentNode;
-                        let levels = 0;
-                        while (parent && parent !== document.body && levels < 10) {
-                            if (parent.hasAttribute(CONFIG.processedAttribute)) {
-                                ancestorsToClear.add(parent);
-                            }
-                            parent = parent.parentNode;
-                            levels++;
-                        }
-
+                        if (node.tagName === 'A' && node.hasAttribute(CONFIG.processedAttribute)) return;
+                        pendingElements.add(node);
+                        hasNewElements = true;
                     } else if (node.nodeType === Node.TEXT_NODE) {
                         if (node.parentNode && node.parentNode.nodeType === Node.ELEMENT_NODE) {
-                            elementsToUpdate.add(node.parentNode);
-                            // Also check ancestors for text node's parent
-                            let parent = node.parentNode;
-                            let levels = 0;
-                            while (parent && parent !== document.body && levels < 10) {
-                                if (parent.hasAttribute(CONFIG.processedAttribute)) {
-                                    ancestorsToClear.add(parent);
-                                }
-                                parent = parent.parentNode;
-                                levels++;
-                            }
-
+                            // If a text node is added, we must re-process the parent.
+                            // However, simply re-adding to intersectionObserver might be ignored if already observed?
+                            // No, IO unobserves after intersection.
+                            // But if parent is already "processed=true", IO -> processContainer -> early return.
+                            // So we MUST clear the attribute on immediate parent.
+                            node.parentNode.removeAttribute(CONFIG.processedAttribute);
+                            pendingElements.add(node.parentNode);
+                            hasNewElements = true;
                         }
                     }
                 });
             } else if (mutation.type === 'characterData') {
                 if (mutation.target.nodeType === Node.TEXT_NODE && mutation.target.parentNode) {
-                    elementsToUpdate.add(mutation.target.parentNode);
+                    // Same for text content change
+                    mutation.target.parentNode.removeAttribute(CONFIG.processedAttribute);
+                    pendingElements.add(mutation.target.parentNode);
+                    hasNewElements = true;
                 }
             }
         });
 
-        // 1. Clear ancestors first
-        if (ancestorsToClear.size > 0) {
-            ancestorsToClear.forEach(el => {
-                el.removeAttribute(CONFIG.processedAttribute);
-            });
-        }
-
-        // 2. Schedule updates (Lazy Load via IntersectionObserver)
-        if (elementsToUpdate.size > 0) {
+        // Optimization: Use requestAnimationFrame or setTimeout to batch IO calls.
+        // Actually, IO.observe is cheap. But we want to avoid spamming.
+        if (hasNewElements) {
             if (timeout) clearTimeout(timeout);
             timeout = setTimeout(() => {
-                elementsToUpdate.forEach(el => {
-                    // Also clear attribute on the element itself if it was somehow marked
-                    // (This ensures we don't skip it if we observe it)
-                    if (el.removeAttribute) {
-                        el.removeAttribute(CONFIG.processedAttribute);
-                    }
-
-                    // Instead of processing immediately, we recognize this is new content.
-                    // We want to apply the same "Lazy Load" logic as the initial page load.
-                    // So we observe the element (if relevant) and its children.
-
-                    if (el.matches && el.matches(relevantTags)) {
-                        intersectionObserver.observe(el);
-                    }
-
-                    if (el.querySelectorAll) {
-                        el.querySelectorAll(relevantTags).forEach(child => {
-                            intersectionObserver.observe(child);
-                        });
-                    }
+                pendingElements.forEach(el => {
+                    // Check relevant tags before observing to reduce noise?
+                    // But 'el' might be a wrapper. We should observe it anyway.
+                    // Or check if it already has processedAttribute (prevent re-observe loop if logic fails)?
+                    // We already cleared attribute for text nodes. New elements don't have it.
+                    intersectionObserver.observe(el);
                 });
+                pendingElements.clear();
             }, 100);
         }
     });
@@ -628,22 +588,6 @@
     }
 
     // Expose debug helpers
-    if (typeof unsafeWindow !== 'undefined') {
-        unsafeWindow.debugLinkify = () => {
-            console.log('Linkify Debug: Checking...');
-            console.log('Global Enabled:', isLinkifyEnabled());
-            console.log('Hostname:', hostname);
-            const example = document.querySelector('cite');
-            if (example) {
-                console.log('Found cite tag:', example);
-                console.log('Processed attr:', example.getAttribute(CONFIG.processedAttribute));
-            }
-        };
-        unsafeWindow.forceLinkify = () => {
-            console.log('Forcing Linkify on Body...');
-            document.body.removeAttribute(CONFIG.processedAttribute);
-            processContainer(document.body);
-        };
-    }
+
 
 })();
