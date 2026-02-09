@@ -1,9 +1,14 @@
 // ==UserScript==
-// @name         Text to Hyperlink
+// @name         Text To Hyperlink & Cloud Drive Auto-Fill
+// @name:zh-CN   文本转超链接 + 网盘提取码自动填充
+// @name:zh-TW   文本转超链接 + 网盘提取码自动填充
 // @namespace    http://tampermonkey.net/
-// @version      0.4
-// @description  Convert plain text URLs to clickable links
+// @version      1.0.5
+// @description  Convert plain text URLs to clickable links and auto-fill cloud drive extraction codes.
+// @description:zh-CN 识别网页中的纯文本链接并转换为可点击的超链接，同时自动识别网盘链接并填充提取码。
+// @description:zh-TW 识别网页中的纯文本链接并转换为可点击的超链接，同时自动识别网盘链接并填充提取码。
 // @author       dogchild
+// @license      MIT
 // @match        *://*/*
 // @grant        GM_registerMenuCommand
 // @grant        GM_getValue
