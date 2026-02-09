@@ -3,7 +3,7 @@
 // @name:zh-CN   文本转超链接 + 网盘提取码自动填充
 // @name:zh-TW   文本转超链接 + 网盘提取码自动填充
 // @namespace    http://tampermonkey.net/
-// @version      1.0.18
+// @version      1.0.21
 // @description  Convert plain text URLs to clickable links and auto-fill cloud drive extraction codes.
 // @description:zh-CN 识别网页中的纯文本链接并转换为可点击的超链接，同时自动识别网盘链接并填充提取码。
 // @description:zh-TW 识别网页中的纯文本链接并转换为可点击的超链接，同时自动识别网盘链接并填充提取码。
@@ -332,6 +332,15 @@
             // Use longer delay for Tianyi Cloud (189.cn) as it needs more time
             const clickDelay = location.hostname.includes('189.cn') ? 1000 : 300;
             setTimeout(() => {
+                // First check for specific button IDs
+                const specificBtn = document.querySelector('#submitBtn');
+                if (specificBtn) {
+                    console.log('[Text-to-Hyperlink] Clicking submit button: #submitBtn');
+                    specificBtn.click();
+                    return;
+                }
+
+                // Fallback: search by keywords
                 const buttons = document.querySelectorAll('button, a.btn, div.btn, .btn');
                 for (const btn of buttons) {
                     const t = btn.innerText || '';
@@ -609,8 +618,6 @@
             return null;
         } catch (e) {
             console.error('Text to Hyperlink Error:', e);
-            // Optional: Visual feedback for debug
-            // document.body.style.border = '5px solid red';
             return null;
         }
     }
@@ -622,8 +629,6 @@
         if (container.hasAttribute(CONFIG.processedAttribute)) {
             return;
         }
-
-        const id = container.id || container.tagName;
 
         container.setAttribute(CONFIG.processedAttribute, 'true');
 
@@ -662,7 +667,7 @@
     }
 
     // --- Observers ---
-    const relevantTags = 'p, div, span, li, td, h1, h2, h3, h4, h5, h6, article, section, blockquote';
+    const relevantTags = 'p, div, span, li, td, h1, h2, h3, h4, h5, h6, article, section, blockquote, font, u';
 
     // IntersectionObserver for visibility
     const intersectionObserver = new IntersectionObserver((entries) => {
@@ -747,7 +752,6 @@
             if (timeout) clearTimeout(timeout);
             timeout = setTimeout(() => {
                 elementsToUpdate.forEach(el => {
-                    const id = el.id || el.tagName;
                     // Reset processed state
                     if (el.removeAttribute) {
                         el.removeAttribute(CONFIG.processedAttribute);
