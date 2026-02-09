@@ -18,7 +18,9 @@
         // URL: http/https
         // Magnet: magnet:?xt=...
         // Custom: tg://, ms-windows-store://, ed2k://, thunder://
-        regex: /((?:https?:\/\/|magnet:\?xt=|tg:\/\/|ms-windows-store:\/\/|ed2k:\/\/|thunder:\/\/)[^\s<>"']+)/gi,
+        // Protocol-less: www.xxx.com or xxx.com (common TLDs)
+        // Strict tail matching: Only continue if followed by start of path/query/hash
+        regex: /((?:https?:\/\/|magnet:\?xt=|tg:\/\/|ms-windows-store:\/\/|ed2k:\/\/|thunder:\/\/)[^\s<>"']+|(?:\b[a-z0-9.-]+\.(?:com|cn|net|org|edu|gov|io|me|info|biz|top|vip|cc|co|uk|jp|de|fr|ru|au|us|ca|br|it|es|nl|se|no|pl|fi|gr|tr|cz|ro|hu|dk|be|at|ch|pt|ie|mx|sg|my|th|vn|ph|id|sa|za|nz|tw|hk|kr|in|tk|ml|ga|cf|gq|tv|ws|xyz|site|win|club|online|fun|wang|space|shop|ltd|work|live|store|bid|loan|click|wiki|tech|cloud|art|love|press|website|trade|date|party|review|video|web|link|mobi|pro|app|dev|ly)|\bwww\.[a-z0-9.-]+)\b(?:[\/?#][^\s<>"']*)?)/gi,
         observeOptions: {
             root: null, // viewport
             rootMargin: '200px', // Pre-load slightly outside viewport
@@ -71,7 +73,7 @@
      */
     function trimUrl(url) {
         let end = url.length - 1;
-        const punctuation = /[,.;:!?")\]]/;
+        const punctuation = /[,.;:!?"\)\]。]/; // Added Chinese period
         const openParen = '(';
         const closeParen = ')';
 
@@ -142,9 +144,15 @@
                     fragment.appendChild(document.createTextNode(preText));
                 }
 
+                // Check protocol
+                let href = url;
+                if (!/^[a-z]+:\/\/|magnet:/.test(url)) {
+                    href = 'https://' + url;
+                }
+
                 // Create link
                 const a = document.createElement('a');
-                a.href = url;
+                a.href = href;
                 a.textContent = url;
                 a.style.color = 'inherit';
                 a.style.textDecoration = 'underline';

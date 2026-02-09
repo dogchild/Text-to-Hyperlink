@@ -59,6 +59,27 @@
         </div>
 
         <div class="block">
+            <h2>Protocol-less URLs</h2>
+            <p>Standard: www.google.com, google.com, example.net</p>
+            <p>Cheap/New TLDs: site.xyz, my.shop, game.club, app.online, news.top</p>
+            <p>Country TLDs: test.co.uk, sina.com.cn, domain.tk, site.ru</p>
+            <p>Free/App Domains (New): vercel.app, unknown.dev, bit.ly/test, js.org, eu.org</p>
+            <p>Complex: sub.domain.co.jp, my-site.org.cn</p>
+
+            <h3>Edge Cases (Strict Logic)</h3>
+            <ul>
+                <li>www.abc.tk (Link: www.abc.tk)</li>
+                <li>abc.tk (Link: abc.tk)</li>
+                <li>abc。tk (Should NOT be a link - Chinese Dot)</li>
+                <li>啊啊啊.tk (Should NOT be a link - Chinese Domain)</li>
+                <li>abc.tk/啊啊啊 (Link: abc.tk - suffix text ignored)</li>
+                <li>啊啊啊/abc.tk/啊啊啊 (Link: abc.tk - suffix text ignored)</li>
+                <li>abc.tk. (Link: abc.tk - trailing dot ignored)</li>
+                <li>abc.tk。 (Link: abc.tk - trailing Chinese dot ignored)</li>
+            </ul>
+        </div>
+
+        <div class="block">
             <h2>Dynamic Content (Click to Load)</h2>
             <button id="loadMore">Load More Content</button>
             <div id="dynamicArea"></div>
