@@ -86,26 +86,56 @@
             <p>Lanzou: www.lanzou.com/b123456 密码: 5678</p>
             <p>Quark: pan.quark.cn/s/abcdef 访问码：9999</p>
 
-            <!-- Mock Input for Auto-fill Test (Open console to see auto-fill log if hash matches) -->
-            <div>
-                <label>Mock Password Input:</label>
-                <input type="text" id="accessCode" placeholder="请输入提取码">
-                <button>提取文件</button>
-                <p><em>(Click generated link above to open in new tab, then manually append #pwd=abcd to THIS page URL
-                        to test auto-fill here)</em></p>
+            <!-- Multi-line Test -->
+            <div class="block">
+                <h2>Multi-line / Complex Layout Test</h2>
+
+                <!-- Case 1: Same text node with newline -->
+                <p>1. Same Node: https://pan.baidu.com/s/sameNode
+                    提取码: 1111</p>
+
+                <!-- Case 2: Separate elements (br) -->
+                <p>2. Break Tag: https://pan.baidu.com/s/breakTag<br>提取码: 2222</p>
+
+                <!-- Case 3: Separate Blocks -->
+                <div>3. Separate Divs: https://pan.baidu.com/s/separateDiv</div>
+                <div>提取码: 3333</div>
+
+                <!-- Case 4: User Example -->
+                <p>4. User Example: Pure@HDSWEB」https://www.alipan.com/s/JuxZ1heVMck
+                    提取码: 7Yww</p>
+
+                <!-- Case 5: Text interspersed -->
+                <p>5. Interspersed: https://pan.baidu.com/s/interspersed (Click me)
+                    Some random text...
+                    提取码: 5555</p>
+
+                <!-- Case 6: Priority Collision (Forward) -->
+                <p>6. Priority Fwd: 提取码: 1111 (Wrong) https://pan.baidu.com/s/priorityCollisionFwd 提取码: 2222 (Correct)
+                </p>
+
+                <!-- Case 7: Priority Collision (Backward) -->
+                <p>7. Priority Bwd: 提取码: 3333 (Wrong) ... 提取码: 4444 (Correct)
+                    https://pan.baidu.com/s/priorityCollisionBwd</p>
             </div>
+            <label>Mock Password Input:</label>
+            <input type="text" id="accessCode" placeholder="请输入提取码">
+            <button>提取文件</button>
+            <p><em>(Click generated link above to open in new tab, then manually append #pwd=abcd to THIS page URL
+                    to test auto-fill here)</em></p>
         </div>
+    </div>
 
-        <div class="block">
-            <h2>Dynamic Content (Click to Load)</h2>
-            <button id="loadMore">Load More Content</button>
-            <div id="dynamicArea"></div>
-        </div>
+    <div class="block">
+        <h2>Dynamic Content (Click to Load)</h2>
+        <button id="loadMore">Load More Content</button>
+        <div id="dynamicArea"></div>
+    </div>
 
-        <div class="block">
-            <h2>Performance Test (Large Block)</h2>
-            <div id="largeBlock"></div>
-        </div>
+    <div class="block">
+        <h2>Performance Test (Large Block)</h2>
+        <div id="largeBlock"></div>
+    </div>
     </div>
 
     <script>

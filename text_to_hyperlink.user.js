@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Text to Hyperlink
 // @namespace    http://tampermonkey.net/
-// @version      0.3
+// @version      0.4
 // @description  Convert plain text URLs to clickable links
 // @author       dogchild
 // @match        *://*/*
@@ -119,17 +119,93 @@
     ];
 
     /**
-     * Attempt to find extraction code near the link
+     * Attempt to find extraction code near the link (Front & Back, Cross-Node, Parent-Sibling)
      */
-    function extractCode(text, linkEndIndex) {
-        // Look ahead 20 chars for code pattern
-        const sub = text.substring(linkEndIndex, linkEndIndex + 30);
-        // Pattern: (code/pwd/提取码/访问码)[:\s]*([a-zA-Z0-9]{4})
-        const codeMatch = sub.match(/(?:code|pwd|提取码|密码|访问码)\s*[:：]?\s*([a-zA-Z0-9]{4})/i);
-        if (codeMatch && codeMatch[1]) {
-            return codeMatch[1];
+    function extractCode(node, matchIndex, matchEnd) {
+        const text = node.nodeValue;
+        const SEARCH_RANGE = 100; // Increased to 120 to handle whitespace/indentation
+
+        // Helper to get text from a node (Text or Element)
+        const getTextFromNode = (n) => {
+            if (!n) return '';
+            if (n.nodeType === Node.TEXT_NODE) return n.nodeValue;
+            if (n.nodeType === Node.ELEMENT_NODE) return n.innerText || '';
+            return '';
+        };
+
+        // Helper to find next/prev meaningful sibling (skipping whitespace/br)
+        const getSiblingText = (startNode, direction = 'next', maxSteps = 3) => {
+            let current = startNode;
+            let result = '';
+            let steps = 0;
+
+            while (current && steps < maxSteps) {
+                current = direction === 'next' ? current.nextSibling : current.previousSibling;
+                if (!current) break;
+
+                // Skip pure whitespace text nodes
+                if (current.nodeType === Node.TEXT_NODE && !current.nodeValue.trim()) {
+                    continue;
+                }
+
+                // Skip <br>
+                if (current.tagName === 'BR') {
+                    continue;
+                }
+
+                // Found meaningful content
+                const content = getTextFromNode(current);
+                if (content.trim()) {
+                    if (direction === 'next') result += '\n' + content;
+                    else result = content + '\n' + result;
+
+                    if (result.length > 20) break;
+                    steps++;
+                }
+            }
+            return result;
+        };
+
+        // Regex: key + strict separator + 4 chars (Global for iter)
+        const codeRegex = /(?:code|pwd|提取码|密码|访问码)\s*[:：]?\s*([a-zA-Z0-9]{4})/gi;
+
+        // --- 1. Search Text AFTER Link (Priority) ---
+        // Range: matchEnd -> matchEnd + 120
+        let textAfter = text.substring(matchEnd, matchEnd + SEARCH_RANGE);
+        textAfter += getSiblingText(node, 'next');
+        // 1b. Parent Next Sibling (Block Level)
+        // Only check parent sibling if we exhausted the current text node within the range
+        // If we still had text in the current node (truncated by range), we shouldn't jump to next block
+        const exhaustedCurrentNode = (matchEnd + SEARCH_RANGE) >= node.nodeValue.length;
+        if (exhaustedCurrentNode && !/(?:code|pwd|提取码|密码|访问码)/i.test(textAfter) && node.parentNode) {
+            textAfter += getSiblingText(node.parentNode, 'next');
         }
-        return null;
+
+        // Find Closest After = FIRST match
+        // Because textAfter starts from matchEnd and goes right.
+        codeRegex.lastIndex = 0;
+        const matchAfter = codeRegex.exec(textAfter);
+        if (matchAfter) return matchAfter[1];
+
+        // --- 2. Search Text BEFORE Link (Secondary) ---
+        // Range: matchIndex - 120 -> matchIndex
+        let textBefore = text.substring(Math.max(0, matchIndex - SEARCH_RANGE), matchIndex);
+        textBefore = getSiblingText(node, 'prev') + textBefore;
+
+        if (!/(?:code|pwd|提取码|密码|访问码)/i.test(textBefore) && node.parentNode) {
+            textBefore = getSiblingText(node.parentNode, 'prev') + textBefore;
+        }
+
+        // Find Closest Before = LAST match
+        // Because textBefore ends at matchIndex. The match closest to the END of textBefore is the one closest to the link.
+        codeRegex.lastIndex = 0;
+        let bestBefore = null;
+        let m;
+        while ((m = codeRegex.exec(textBefore)) !== null) {
+            bestBefore = m[1]; // Keep updating, so we get the last one
+        }
+
+        return bestBefore;
     }
 
     /**
@@ -332,11 +408,11 @@
                 // Check for Drive Code
                 const matchEnd = matchIndex + originalUrl.length;
                 // Only check text immediately following if drive is enabled
-                if (isDriveEnabled() && matchEnd < text.length) {
+                if (isDriveEnabled()) {
                     // Check if it's a known drive
                     const isDrive = DRIVE_RULES.some(rule => rule.regex.test(url));
                     if (isDrive) {
-                        const code = extractCode(text, matchEnd);
+                        const code = extractCode(node, matchIndex, matchEnd); // Fixed args
                         if (code) {
                             href += `#pwd=${code}`;
                             // Note: We don't remove the code from text, just append to href
@@ -524,15 +600,6 @@
         }
     });
 
-    // Start observing
-    mutationObserver.observe(document.body, {
-        childList: true,
-        subtree: true,
-        characterData: true // Watch for text changes
-    });
-
-    // Initial pass: Observe all existing elements
-    const relevantTags = 'p, div, span, li, td, h1, h2, h3, h4, h5, h6, article, section, blockquote';
     // Initial pass: Observe all existing elements
     // Only if Linkify is enabled
     if (isLinkifyEnabled()) {
