@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Text to Hyperlink
 // @namespace    http://tampermonkey.net/
-// @version      0.2
+// @version      0.3
 // @description  Convert plain text URLs to clickable links
 // @author       dogchild
 // @match        *://*/*
@@ -14,60 +14,181 @@
 (function () {
     'use strict';
 
-    // --- Blacklist / Toggle Logic ---
+    // --- Settings & Storage Keys ---
     const hostname = window.location.hostname;
-    const BLACKLIST_KEY = 'tm_linkify_blacklist';
+    const KEYS = {
+        BLACKLIST_LINKIFY: 'tm_linkify_blacklist',
+        BLACKLIST_DRIVE: 'tm_linkify_drive_blacklist',
+        GLOBAL_LINKIFY: 'tm_linkify_global_enabled',
+        GLOBAL_DRIVE: 'tm_linkify_drive_global_enabled'
+    };
 
-    // Helper to get blacklist
-    const getBlacklist = () => GM_getValue(BLACKLIST_KEY, []);
+    // --- Helpers ---
+    const getValue = (key, def) => GM_getValue(key, def);
+    const setValue = (key, val) => GM_setValue(key, val);
 
-    // Helper to set blacklist
-    const setBlacklist = (list) => GM_setValue(BLACKLIST_KEY, list);
+    // Global Settings
+    const getGlobalLinkify = () => getValue(KEYS.GLOBAL_LINKIFY, true);
+    const setGlobalLinkify = (val) => setValue(KEYS.GLOBAL_LINKIFY, val);
 
-    // Check if current site is disabled
-    const isBlacklisted = () => getBlacklist().includes(hostname);
+    const getGlobalDrive = () => getValue(KEYS.GLOBAL_DRIVE, true);
+    const setGlobalDrive = (val) => setValue(KEYS.GLOBAL_DRIVE, val);
+
+    // Site Settings (Blacklists)
+    const getBlacklistLinkify = () => getValue(KEYS.BLACKLIST_LINKIFY, []);
+    const setBlacklistLinkify = (list) => setValue(KEYS.BLACKLIST_LINKIFY, list);
+
+    const getBlacklistDrive = () => getValue(KEYS.BLACKLIST_DRIVE, []);
+    const setBlacklistDrive = (list) => setValue(KEYS.BLACKLIST_DRIVE, list);
+
+    // Computed Status for Current Site
+    const isLinkifyEnabled = () => getGlobalLinkify() && !getBlacklistLinkify().includes(hostname);
+    const isDriveEnabled = () => getGlobalDrive() && !getBlacklistDrive().includes(hostname);
+
+    // Toggle Helpers
+    const toggleGlobalLinkify = () => { setGlobalLinkify(!getGlobalLinkify()); location.reload(); };
+    const toggleGlobalDrive = () => { setGlobalDrive(!getGlobalDrive()); location.reload(); };
+
+    const toggleSiteLinkify = () => {
+        const list = getBlacklistLinkify();
+        const index = list.indexOf(hostname);
+        if (index > -1) list.splice(index, 1); // Enable
+        else list.push(hostname); // Disable
+        setBlacklistLinkify(list);
+        location.reload();
+    };
+
+    const toggleSiteDrive = () => {
+        const list = getBlacklistDrive();
+        const index = list.indexOf(hostname);
+        if (index > -1) list.splice(index, 1); // Enable
+        else list.push(hostname); // Disable
+        setBlacklistDrive(list);
+        location.reload();
+    };
 
     // I18n Helper
     const isChinese = navigator.language.startsWith('zh');
     const STRINGS = {
-        enable: isChinese ? `✅ 在 ${hostname} 上启用` : `✅ Enable for ${hostname}`,
-        disable: isChinese ? `🚫 在 ${hostname} 上禁用` : `🚫 Disable for ${hostname}`,
-        disabledLog: isChinese ? '[Text-to-Hyperlink] 此站点已禁用' : '[Text-to-Hyperlink] Disabled for this site.'
+        globalLinkifyOn: isChinese ? '🚫 全局：超链接转换已关闭' : '🚫 Global: Linkify Disabled',
+        globalLinkifyOff: isChinese ? '✅ 全局：超链接转换已开启' : '✅ Global: Linkify Enabled',
+        globalDriveOn: isChinese ? '🚫 全局：网盘识别已关闭' : '🚫 Global: Drive Recognition Disabled',
+        globalDriveOff: isChinese ? '✅ 全局：网盘识别已开启' : '✅ Global: Drive Recognition Enabled',
+        siteLinkifyOn: isChinese ? `🚫 本站：超链接转换已关闭` : `🚫 Site: Linkify Disabled`,
+        siteLinkifyOff: isChinese ? `✅ 本站：超链接转换已开启` : `✅ Site: Linkify Enabled`,
+        siteDriveOn: isChinese ? `🚫 本站：网盘识别已关闭` : `🚫 Site: Drive Recognition Disabled`,
+        siteDriveOff: isChinese ? `✅ 本站：网盘识别已开启` : `✅ Site: Drive Recognition Enabled`,
+        disabledLog: isChinese ? '[Text-to-Hyperlink] 此站点已禁用链接转换' : '[Text-to-Hyperlink] Linkify disabled for this site.'
     };
 
-    // Register Menu Command
+    // Register Menu Commands
     function updateMenuCommand() {
-        const disabled = isBlacklisted();
-        const commandName = disabled ? STRINGS.enable : STRINGS.disable;
+        // 1. Global Linkify
+        GM_registerMenuCommand(getGlobalLinkify() ? STRINGS.globalLinkifyOff : STRINGS.globalLinkifyOn, toggleGlobalLinkify);
 
-        GM_registerMenuCommand(commandName, () => {
-            const list = getBlacklist();
-            if (disabled) {
-                // Enable: remove from blacklist
-                const index = list.indexOf(hostname);
-                if (index > -1) {
-                    list.splice(index, 1);
-                    setBlacklist(list);
-                    location.reload();
-                }
-            } else {
-                // Disable: add to blacklist
-                if (!list.includes(hostname)) {
-                    list.push(hostname);
-                    setBlacklist(list);
-                    location.reload();
-                }
-            }
-        });
+        // 2. Global Drive
+        GM_registerMenuCommand(getGlobalDrive() ? STRINGS.globalDriveOff : STRINGS.globalDriveOn, toggleGlobalDrive);
+
+        // 3. Site Linkify
+        const siteLinkifyBlacklisted = getBlacklistLinkify().includes(hostname);
+        GM_registerMenuCommand(siteLinkifyBlacklisted ? STRINGS.siteLinkifyOn : STRINGS.siteLinkifyOff, toggleSiteLinkify);
+
+        // 4. Site Drive
+        const siteDriveBlacklisted = getBlacklistDrive().includes(hostname);
+        GM_registerMenuCommand(siteDriveBlacklisted ? STRINGS.siteDriveOn : STRINGS.siteDriveOff, toggleSiteDrive);
     }
 
     // Initial Menu Registration
     updateMenuCommand();
 
-    // Stop execution if blacklisted
-    if (isBlacklisted()) {
+    // Check Linkify Status (Drive status is checked inside linkifyTextNode and autoFill)
+    if (!isLinkifyEnabled()) {
         console.log(STRINGS.disabledLog);
-        return;
+        // Note: We still run autoFillDrivePassword because it might be a target page opened from elsewhere
+    }
+
+    // New Configuration for Drives
+    const DRIVE_RULES = [
+        { name: 'baidu', regex: /pan\.baidu\.com/, codeParams: ['pwd', 'code', '提取码'] },
+        { name: 'aliyun', regex: /alipan\.com|aliyundrive\.com/, codeParams: ['pwd', 'code', '提取码'] },
+        { name: 'lanzou', regex: /lanzou.\.com|woozooo\.com/, codeParams: ['pwd', 'code', '提取码'] },
+        { name: '123pan', regex: /123pan\.com/, codeParams: ['pwd', 'code', '提取码'] },
+        { name: 'quark', regex: /pan\.quark\.cn/, codeParams: ['pwd', 'code', '提取码'] },
+        { name: 'chengtong', regex: /ctfile\.com|pipipan\.com/, codeParams: ['pwd', 'code', '提取码'] },
+        { name: 'tianyi', regex: /cloud\.189\.cn/, codeParams: ['pwd', 'code', '访问码'] }
+    ];
+
+    /**
+     * Attempt to find extraction code near the link
+     */
+    function extractCode(text, linkEndIndex) {
+        // Look ahead 20 chars for code pattern
+        const sub = text.substring(linkEndIndex, linkEndIndex + 30);
+        // Pattern: (code/pwd/提取码/访问码)[:\s]*([a-zA-Z0-9]{4})
+        const codeMatch = sub.match(/(?:code|pwd|提取码|密码|访问码)\s*[:：]?\s*([a-zA-Z0-9]{4})/i);
+        if (codeMatch && codeMatch[1]) {
+            return codeMatch[1];
+        }
+        return null;
+    }
+
+    /**
+     * Auto-fill logic for Cloud Drive pages
+     */
+    function autoFillDrivePassword() {
+        const hash = location.hash;
+        if (!hash || !hash.includes('pwd=')) return;
+
+        const pwd = hash.split('pwd=')[1].split('&')[0];
+        if (!pwd) return;
+
+        console.log('[Text-to-Hyperlink] Auto-filling password:', pwd);
+
+        // Heuristic Selectors
+        const selectors = [
+            '#accessCode', '#pwd', '#code', // ID
+            'input[id*="code"]', 'input[id*="pwd"]', // Fuzzy ID
+            'input[name="accessCode"]', 'input[name="pwd"]', // Name
+            '.input-code', // Class
+            'input[placeholder*="提取码"]', 'input[placeholder*="密码"]', 'input[placeholder*="Code"]', // Placeholder
+            'input[type="password"]' // Fallback
+        ];
+
+        // Try to find the input
+        let input = null;
+        for (const sel of selectors) {
+            input = document.querySelector(sel);
+            if (input) break;
+        }
+
+        if (input) {
+            input.value = pwd;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+
+            // Attempt simple submit
+            // Find nearby button
+            // Heuristic keywords: 提取, 下载, 确定, Submit, OK
+            setTimeout(() => {
+                const buttons = document.querySelectorAll('button, a.btn, div.btn');
+                for (const btn of buttons) {
+                    const t = btn.innerText || '';
+                    if (/提取|下载|确定|Submit|OK/.test(t)) {
+                        btn.click();
+                        break;
+                    }
+                }
+            }, 500);
+        }
+    }
+
+    // Run auto-fill on load (Check Drive Enabled Status)
+    if (isDriveEnabled()) {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', autoFillDrivePassword);
+        } else {
+            autoFillDrivePassword();
+        }
     }
 
     // Configuration
@@ -206,6 +327,21 @@
                 let href = url;
                 if (!/^[a-z]+:\/\/|magnet:/.test(url)) {
                     href = 'https://' + url;
+                }
+
+                // Check for Drive Code
+                const matchEnd = matchIndex + originalUrl.length;
+                // Only check text immediately following if drive is enabled
+                if (isDriveEnabled() && matchEnd < text.length) {
+                    // Check if it's a known drive
+                    const isDrive = DRIVE_RULES.some(rule => rule.regex.test(url));
+                    if (isDrive) {
+                        const code = extractCode(text, matchEnd);
+                        if (code) {
+                            href += `#pwd=${code}`;
+                            // Note: We don't remove the code from text, just append to href
+                        }
+                    }
                 }
 
                 // Create link
@@ -397,8 +533,20 @@
 
     // Initial pass: Observe all existing elements
     const relevantTags = 'p, div, span, li, td, h1, h2, h3, h4, h5, h6, article, section, blockquote';
-    document.querySelectorAll(relevantTags).forEach(el => {
-        intersectionObserver.observe(el);
-    });
+    // Initial pass: Observe all existing elements
+    // Only if Linkify is enabled
+    if (isLinkifyEnabled()) {
+        const relevantTags = 'p, div, span, li, td, h1, h2, h3, h4, h5, h6, article, section, blockquote';
+        document.querySelectorAll(relevantTags).forEach(el => {
+            intersectionObserver.observe(el);
+        });
+
+        // Start mutation observer
+        mutationObserver.observe(document.body, {
+            childList: true,
+            subtree: true,
+            characterData: true // Watch for text changes
+        });
+    }
 
 })();

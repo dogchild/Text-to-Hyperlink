@@ -80,6 +80,23 @@
         </div>
 
         <div class="block">
+            <h2>Cloud Drive Test (Auto-Fill)</h2>
+            <p>Baidu: pan.baidu.com/s/123456 提取码: abcd</p>
+            <p>Aliyun: alipan.com/s/xyz789 code: 1234</p>
+            <p>Lanzou: www.lanzou.com/b123456 密码: 5678</p>
+            <p>Quark: pan.quark.cn/s/abcdef 访问码：9999</p>
+
+            <!-- Mock Input for Auto-fill Test (Open console to see auto-fill log if hash matches) -->
+            <div>
+                <label>Mock Password Input:</label>
+                <input type="text" id="accessCode" placeholder="请输入提取码">
+                <button>提取文件</button>
+                <p><em>(Click generated link above to open in new tab, then manually append #pwd=abcd to THIS page URL
+                        to test auto-fill here)</em></p>
+            </div>
+        </div>
+
+        <div class="block">
             <h2>Dynamic Content (Click to Load)</h2>
             <button id="loadMore">Load More Content</button>
             <div id="dynamicArea"></div>
