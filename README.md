@@ -40,7 +40,7 @@
 ## 📥 安装
 
 1. 安装 [Tampermonkey](https://www.tampermonkey.net/) 扩展
-2. [点击安装脚本](#)
+2. [点击安装脚本](https://github.com/dogchild/Text-to-Hyperlink/raw/refs/heads/main/text_to_hyperlink.user.js)
 
 ## 📖 使用
 

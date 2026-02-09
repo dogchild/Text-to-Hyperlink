@@ -40,7 +40,7 @@ Control via Tampermonkey menu:
 ## 📥 Installation
 
 1. Install [Tampermonkey](https://www.tampermonkey.net/) extension
-2. [Click to install](#)
+2. [Click to install](https://github.com/dogchild/Text-to-Hyperlink/raw/refs/heads/main/text_to_hyperlink.user.js)
 
 ## 📖 Usage
 
