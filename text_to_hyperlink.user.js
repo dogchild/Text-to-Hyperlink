@@ -1,16 +1,74 @@
 // ==UserScript==
 // @name         Text to Hyperlink
 // @namespace    http://tampermonkey.net/
-// @version      0.1
+// @version      0.2
 // @description  Convert plain text URLs to clickable links
-// @author       You
+// @author       dogchild
 // @match        *://*/*
-// @grant        none
+// @grant        GM_registerMenuCommand
+// @grant        GM_getValue
+// @grant        GM_setValue
 // @run-at       document-end
 // ==/UserScript==
 
 (function () {
     'use strict';
+
+    // --- Blacklist / Toggle Logic ---
+    const hostname = window.location.hostname;
+    const BLACKLIST_KEY = 'tm_linkify_blacklist';
+
+    // Helper to get blacklist
+    const getBlacklist = () => GM_getValue(BLACKLIST_KEY, []);
+
+    // Helper to set blacklist
+    const setBlacklist = (list) => GM_setValue(BLACKLIST_KEY, list);
+
+    // Check if current site is disabled
+    const isBlacklisted = () => getBlacklist().includes(hostname);
+
+    // I18n Helper
+    const isChinese = navigator.language.startsWith('zh');
+    const STRINGS = {
+        enable: isChinese ? `✅ 在 ${hostname} 上启用` : `✅ Enable for ${hostname}`,
+        disable: isChinese ? `🚫 在 ${hostname} 上禁用` : `🚫 Disable for ${hostname}`,
+        disabledLog: isChinese ? '[Text-to-Hyperlink] 此站点已禁用' : '[Text-to-Hyperlink] Disabled for this site.'
+    };
+
+    // Register Menu Command
+    function updateMenuCommand() {
+        const disabled = isBlacklisted();
+        const commandName = disabled ? STRINGS.enable : STRINGS.disable;
+
+        GM_registerMenuCommand(commandName, () => {
+            const list = getBlacklist();
+            if (disabled) {
+                // Enable: remove from blacklist
+                const index = list.indexOf(hostname);
+                if (index > -1) {
+                    list.splice(index, 1);
+                    setBlacklist(list);
+                    location.reload();
+                }
+            } else {
+                // Disable: add to blacklist
+                if (!list.includes(hostname)) {
+                    list.push(hostname);
+                    setBlacklist(list);
+                    location.reload();
+                }
+            }
+        });
+    }
+
+    // Initial Menu Registration
+    updateMenuCommand();
+
+    // Stop execution if blacklisted
+    if (isBlacklisted()) {
+        console.log(STRINGS.disabledLog);
+        return;
+    }
 
     // Configuration
     const CONFIG = {
