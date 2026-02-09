@@ -3,7 +3,7 @@
 // @name:zh-CN   文本转超链接 + 网盘提取码自动填充
 // @name:zh-TW   文本转超链接 + 网盘提取码自动填充
 // @namespace    http://tampermonkey.net/
-// @version      1.0.22
+// @version      1.0.23
 // @description  Convert plain text URLs to clickable links and auto-fill cloud drive extraction codes.
 // @description:zh-CN 识别网页中的纯文本链接并转换为可点击的超链接，同时自动识别网盘链接并填充提取码。
 // @description:zh-TW 识别网页中的纯文本链接并转换为可点击的超链接，同时自动识别网盘链接并填充提取码。
@@ -769,8 +769,21 @@
                     if (el.removeAttribute) {
                         el.removeAttribute(CONFIG.processedAttribute);
                     }
-                    // Re-observe
-                    intersectionObserver.observe(el);
+                    // Check if element is already in viewport - process directly
+                    const rect = el.getBoundingClientRect();
+                    const isInViewport = (
+                        rect.top < window.innerHeight + 200 &&
+                        rect.bottom > -200 &&
+                        rect.left < window.innerWidth + 200 &&
+                        rect.right > -200
+                    );
+                    if (isInViewport) {
+                        // Process directly since already visible
+                        processContainer(el);
+                    } else {
+                        // Defer to IntersectionObserver
+                        intersectionObserver.observe(el);
+                    }
                 });
             }, 200);
         }
