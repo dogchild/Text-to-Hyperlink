@@ -3,7 +3,7 @@
 // @name:zh-CN   文本转超链接 + 网盘提取码自动填充
 // @name:zh-TW   文本转超链接 + 网盘提取码自动填充
 // @namespace    http://tampermonkey.net/
-// @version      1.1.1
+// @version      1.2.0
 // @description  Convert plain text URLs to clickable links and auto-fill cloud drive extraction codes.
 // @description:zh-CN 识别网页中的纯文本链接并转换为可点击的超链接，同时自动识别网盘链接并填充提取码。
 // @description:zh-TW 识别网页中的纯文本链接并转换为可点击的超链接，同时自动识别网盘链接并填充提取码。
@@ -310,8 +310,8 @@
     }
 
     const CONFIG = {
-        // v1.1.1: Added path matching to bare domain branch (fix example.net/123)
-        regex: /((?:https?:\/\/|magnet:\?xt=|tg:\/\/|ms-windows-store:\/\/|ed2k:\/\/|thunder:\/\/)[^\s<>"'（）]+|(?:\b|(?<![a-zA-Z0-9@._-]))[a-z0-9.-]+\.(?:com|cn|net|org|edu|gov|io|me|info|biz|top|vip|cc|co|uk|jp|de|fr|ru|au|us|ca|br|it|es|nl|se|no|pl|fi|gr|tr|cz|ro|hu|dk|be|at|ch|pt|ie|mx|sg|my|th|vn|ph|id|sa|za|nz|tw|hk|kr|in|tk|ml|ga|cf|gq|tv|ws|xyz|site|win|club|online|fun|wang|space|shop|ltd|work|live|store|bid|loan|click|wiki|tech|cloud|art|love|press|website|trade|date|party|review|video|web|link|mobi|pro|app|dev|ly)\b(?!@|-)(?:[\/?#][^\s<>"'（）]*)?|\bwww\.[a-z0-9.-]+(?:[\/?#][^\s<>"'（）]*)?)/gi,
+        // v1.2.0: Added email matching (mailto:) as highest priority branch
+        regex: /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(?:com|cn|net|org|edu|gov|io|me|info|biz|top|vip|cc|co|uk|jp|de|fr|ru|au|us|ca|br|it|es|nl|se|no|pl|fi|gr|tr|cz|ro|hu|dk|be|at|ch|pt|ie|mx|sg|my|th|vn|ph|id|sa|za|nz|tw|hk|kr|in|tk|ml|ga|cf|gq|tv|ws|xyz|site|win|club|online|fun|wang|space|shop|ltd|work|live|store|bid|loan|click|wiki|tech|cloud|art|love|press|website|trade|date|party|review|video|web|link|mobi|pro|app|dev|ly)\b|(?:https?:\/\/|magnet:\?xt=|tg:\/\/|ms-windows-store:\/\/|ed2k:\/\/|thunder:\/\/)[^\s<>"'（）]+|(?:\b|(?<![a-zA-Z0-9@._-]))[a-z0-9.-]+\.(?:com|cn|net|org|edu|gov|io|me|info|biz|top|vip|cc|co|uk|jp|de|fr|ru|au|us|ca|br|it|es|nl|se|no|pl|fi|gr|tr|cz|ro|hu|dk|be|at|ch|pt|ie|mx|sg|my|th|vn|ph|id|sa|za|nz|tw|hk|kr|in|tk|ml|ga|cf|gq|tv|ws|xyz|site|win|club|online|fun|wang|space|shop|ltd|work|live|store|bid|loan|click|wiki|tech|cloud|art|love|press|website|trade|date|party|review|video|web|link|mobi|pro|app|dev|ly)\b(?!@|-)(?:[\/?#][^\s<>"'（）]*)?|\bwww\.[a-z0-9.-]+(?:[\/?#][^\s<>"'（）]*)?)/gi,
         observeOptions: {
             root: null,
             rootMargin: '200px',
@@ -425,18 +425,28 @@
                     fragment.appendChild(document.createTextNode(preText));
                 }
 
-                let href = url;
-                if (!/^[a-z]+:\/\/|magnet:/.test(url)) {
-                    href = 'https://' + url;
-                }
+                // Determine link type: email vs URL
+                const isEmail = url.includes('@') && !url.includes('://');
+                let href;
 
-                if (isDriveEnabled()) {
-                    const isDrive = DRIVE_RULES.some(rule => rule.regex.test(url));
-                    if (isDrive) {
-                        const matchEnd = matchIndex + originalUrl.length;
-                        const code = extractCode(node, matchIndex, matchEnd);
-                        if (code) {
-                            href += `#pwd=${code}`;
+                if (isEmail) {
+                    // Email address -> mailto: link
+                    href = 'mailto:' + url;
+                } else {
+                    // Regular URL
+                    href = url;
+                    if (!/^[a-z]+:\/\/|magnet:/.test(url)) {
+                        href = 'https://' + url;
+                    }
+
+                    if (isDriveEnabled()) {
+                        const isDrive = DRIVE_RULES.some(rule => rule.regex.test(url));
+                        if (isDrive) {
+                            const matchEnd = matchIndex + originalUrl.length;
+                            const code = extractCode(node, matchIndex, matchEnd);
+                            if (code) {
+                                href += `#pwd=${code}`;
+                            }
                         }
                     }
                 }
@@ -446,9 +456,13 @@
                 a.textContent = url;
                 a.style.color = 'inherit';
                 a.style.textDecoration = 'underline';
-                a.target = '_blank';
-                a.rel = 'noopener noreferrer';
                 a.setAttribute(CONFIG.processedAttribute, 'true');
+
+                // Email links don't need new tab; URL links do
+                if (!isEmail) {
+                    a.target = '_blank';
+                    a.rel = 'noopener noreferrer';
+                }
 
                 fragment.appendChild(a);
 
