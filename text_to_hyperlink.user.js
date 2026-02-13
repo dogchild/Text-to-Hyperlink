@@ -458,8 +458,9 @@
                 a.style.textDecoration = 'underline';
                 a.setAttribute(CONFIG.processedAttribute, 'true');
 
-                // Email links don't need new tab; URL links do
-                if (!isEmail) {
+                // Email and download protocol links open in current tab; regular URLs open in new tab
+                const noNewTab = isEmail || /^(?:magnet:|thunder:|ed2k:)/.test(href);
+                if (!noNewTab) {
                     a.target = '_blank';
                     a.rel = 'noopener noreferrer';
                 }
